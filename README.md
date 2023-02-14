@@ -5,6 +5,12 @@ This program was written specific to my needs.  It is not a general solution for
 
 ## Overview
 
-This program sends out a WSPR beacon on 15m, 10m, 6m, and 2m.  The four two minute beacons have a two minute interval between them.  Two minutes after the last beacon the program goes to wsprnet.org and collects all reports from these four beacons.  It then parses and displays the results.  Any report greater than 0 dB is printed in BLUE, any greater than 3000 miles away is in GREEN, and, when 10m is shutting down, any 10m reports in RED.
+This program sends out a WSPR beacon on 15m, 10m, 6m, and 2m.  The four two minute beacons have two minute intervals between them.  Two minutes after the last beacon the program goes to wsprnet.org and collects all reports from these four beacons.  It then parses and displays the results.  Any report greater than 0 dB is printed in BLUE, any report from more than 3000 miles away is in GREEN, and, when 10m is shutting down, any 10m reports in RED.
 
+The program uses the Port Audio library (same as WSJT-X).  It reads wav files and sends them out the sound card (wav_output2.c).  The files in this repository were generated using wspr0, a deprecated program.  WSJT-X and wsprd can also generate them.  For 2m and 6m the 1500Hz file is always chosen.  For 10m and 15m, more crowded bands, it rotates through them.
 
+The radio controlled is an old Yaesu FT847 (using ft847.c).  Obviously you will need to substitute a controller for your own radio or use one of the libraries out there.  (The FT847 had limited CAT control.  A modern radio would allow more interesting features to be added).
+
+The program was originally written on an Ubuntu box and them oved to a Raspberry Pi (hence the RPI in the name).  There is no make file.  This is the command used to build:
+  gcc -g -Wall -o twsprRPI twsprRPI.c wav_output2.c ft847.c wsprnet.c azdist.c geodist.c grid2deg.c -lportaudio -lrt -lm -lasound -pthread
+I've made no attempt at optimization.
