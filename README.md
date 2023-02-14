@@ -5,7 +5,7 @@ This program is written specific to my needs.  It is not a general solution for 
 
 ## Overview
 
-This program sends out a WSPR beacon on 15m, 10m, 6m, and 2m.  The four two minute beacons have two minute intervals between them.  It waits two more minutes and then goes to wsprnet.org and collects reports from these four beacons.  It parses and displays the results.  Any report greater than 0 dB is printed in BLUE, any report from more than 3000 miles away is in GREEN, and, when 10m is shutting down, all 10m reports in RED (wsprnet.c).
+This program sends out a WSPR beacon on 15m, 10m, 6m, and 2m.  The four two minute beacons have two minute intervals between them.  It then waits two more minutes and goes to wsprnet.org and collects reports from these four beacons.  It parses and displays the results.  Any report greater than 0 dB is printed in BLUE, any report from more than 3000 miles away is in GREEN, and, when 10m is shutting down, all 10m reports in RED (wsprnet.c).
 
 This process repeates every 28 minutes.  During the intervals between beacons the radio is set to monitor some other frequency.  The actual frequencies used are stored in WSPRConfig, a simple text file.
 
