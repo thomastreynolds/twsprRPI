@@ -12,7 +12,9 @@ The program uses the Port Audio library (same as WSJT-X).  It reads wav files an
 The radio is an old Yaesu FT847 (using ft847.c).  Obviously you will need to substitute a controller for your own radio or use one of the libraries out there.  (The FT847 had limited CAT control.  A modern radio would allow more interesting features to be added).
 
 The program was originally written on an Ubuntu box and them oved to a Raspberry Pi (hence the RPI in the name).  There is no makefile.  This is the command used to build:
+  
   gcc -g -Wall -o twsprRPI twsprRPI.c wav_output2.c ft847.c wsprnet.c azdist.c geodist.c grid2deg.c -lportaudio -lrt -lm -lasound -pthread
+  
 I've made no attempt at optimization.  The last three C files are translated from WSJT-X Fortran code, used to compute azimuth and distance.
 
 Enjoy!
