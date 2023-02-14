@@ -1,0 +1,13 @@
+#
+#   The timestamp format is "%Y-%m-%d %H:%M:%S", for example "2022-10-02 16:46:00".
+#       The '-' and the ':' are required, with a space between date and time.
+#     Always local time, not UTC.
+#   The first timestamp is start time, then a comma, then stop time.
+#   The program check the first character of each line for a '#', indicating a
+#       comment.  It will then stop after reading the first timestamp set.  If the
+#       stop time has passed it will rewrite this file, eliminating that line.
+#
+2022-12-13 07:01:32, 2022-12-13 07:16:23    # noaa-15 137.620
+2022-12-11 07:50:47, 2022-12-11 08:06:20    # noaa-19 137.100
+2022-12-13 10:18:53, 2022-12-13 10:34:29    # noaa-18 137.915
+

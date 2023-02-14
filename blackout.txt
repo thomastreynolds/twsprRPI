@@ -1,0 +1,9 @@
+#
+#   The timestamp format is "%Y-%m-%d %H:%M:%S", for example "2022-10-02 16:46:00".
+#       The '-' and the ':' are required, with a space between date and time.
+#     Always local time, not UTC.
+#   The first timestamp is start time, then a comma, then stop time.
+#   The program check the first character of each line for a '#', indicating a
+#       comment.  It will then stop after reading the first timestamp set.  If the
+#       stop time has passed it will rewrite this file, eliminating that line.
+#
