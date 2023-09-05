@@ -1,5 +1,5 @@
 /*
-    gcc -g -Wall -o twsprRPI twsprRPI.c wav_output2.c ft847.c wsprnet.c azdist.c geodist.c grid2deg.c -lportaudio -lrt -lm -lasound -pthread
+    gcc -g -Wall -o twsprRPI twsprRPI.c wav_output3.c ft847.c wsprnet.c azdist.c geodist.c grid2deg.c getTempData.c -lportaudio -lrt -lm -lasound -pthread
 
     When running direct stderr to null with
         ./twsprRPI 2>/dev/null
@@ -13,7 +13,7 @@
     * A third file, blackout.txt, exists to prevent sending beacon during a satellite pass.  It is checked at the beginning of each waitForTopOfEvenMinute().  If
     necessary it will hold the program until the blackout period ends.  Format of blackout.txt file is described just above doBlackout() below.
 
-    * A fourth file, raw_reports_log.txt, records all stations that reported hearing my beacon.  The date is mission from the first year or so of this file.
+    * A fourth file, raw_reports_log.txt, records all stations that reported hearing my beacon.  The date is missing from the first year or so of this file.
 
     pavucontrol is different for 6m and for 10m in order to get 10w output.  With gain = 1.0 (in wav_output2.c, global variable) on 10m the pavucontrol for this
     app runs about 39% while for 6m about 33%.  So in order to keep the pavucontrol the same (39%) for both I need to reduce the gain for 6m to 0.6.  So I added
@@ -41,29 +41,36 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include "ft847.h"
+#include "twsprRPI.h"
+#include "wav_output3.h"
+#include "getTempData.h"
 
-
-#define MINUTES_TO_WAIT     (29)
+#define MINUTES_TO_WAIT     (BEACON_INTERVAL+1)
 #define SECONDS_TO_WAIT     (MINUTES_TO_WAIT*60)    //  Tx for 2 min, wait 25 min, then waitForTopOfEvenMinute() will wait for the next min, resulting in Tx 28 min apart.
 #define WSPR_DEFAULT_15M    (21094630)
 #define WSPR_DEFAULT_10M    (28124620)
 #define WSPR_DEFAULT_6M     (50293080)
-#define WSPR_DEFAULT_2M     (144489110)             // was 144489060 but N3IZN said I was too low.  I think both of our radios are off.
+#define WSPR_DEFAULT_2M     (144489110)
+#define WSPR_17M            (18104600)
 #define WSPR_15M            (21094600)              //  the actual frequencies.  The fudge factor is in readConfigFileWSPRFreq().
+#define WSPR_12M            (24924600)
 #define WSPR_10M            (28124600)
 #define WSPR_6M             (50293000)
 #define WSPR_2M             (144489000)
 #define CONFIG_FILENAME     "WSPRConfig"
+#define TEMPERATURE_BEACON_MAX          ((double)85.0)                  // stop sending beacons above this temperature
+#define TEMPERATURE_POWER_OFF           (TEMPERATURE_BEACON_MAX+5.0)    // power down radio above this temperature
+#define TEMPERATURE_HYSTERESIS_BOTTOM   (TEMPERATURE_BEACON_MAX+1.0)    // if powered off then power on below this temperature
 
-#define NO_WAIT_FIRST_BURST 1
-#define BLACKOUT_FILENAME   "blackout.txt"
+#define NO_WAIT_FIRST_BURST     1
+#define BLACKOUT_FILENAME       "blackout.txt"
 
-extern int sendWSPRData( char *filename, float gainX );     // would normally be in wav_output2.h but this is the only definition so just put it here.
-extern int initializePortAudio( void );
-extern void terminatePortAudio( void );
-extern int doCurl( char* date1, char* date2, char* date3, char* date4, char* termPTSNum );         // same here except this is from wsprnet.c
+//extern int sendWSPRData( char *filename, float gainX );     // would normally be in wav_output2.h but this is the only definition so just put it here.
+//extern int initializePortAudio( void );
+//extern void terminatePortAudio( void );
+extern int doCurl( struct BeaconData *beaconData, char* termPTSNum );
 
-extern double n3iznFreq;        // this is also the only variable definition imported from wsprnet.c
+double n3iznFreq;        // this is also the only variable definition imported from wsprnet.c
 
 int terminate = 0;
 
@@ -80,7 +87,7 @@ static char lineToRemove[256] = "";     // for blackoutCheck() and blackoutUpdat
 int sendUDPEmailMsg( char *message );
 
 
-static int readConfigFile( int *rx0FreqHz, int *tx1FreqHz, int *tx2FreqHz, int *tx3FreqHz, int *tx4FreqHz );
+static int readConfigFile( int *rxFreqHz, struct BeaconData *beaconData );
 static int convResultOrAdjust( int convResult );
 static int readConfigFileWSPRFreq( int convResult );
 static int readConfigFileWSPRFreqHelp( int convResult, int WSPRFreq );
@@ -110,14 +117,11 @@ int main( int argc, char **argv ) {
     struct timeval tv;
     int retval;
     int NumBytesIn;
-    char timestamp1[16],timestamp2[16],timestamp3[16],timestamp4[16];
+    struct BeaconData beaconData[ MAX_NUMBER_OF_BEACONS ];
     char termPTSNum[4] = "";
+    int heatWait = 0;
 
-    int rx0FreqHz = WSPR_DEFAULT_15M;
-    int tx1FreqHz = WSPR_DEFAULT_15M;
-    int tx2FreqHz = WSPR_DEFAULT_10M;
-    int tx3FreqHz = WSPR_DEFAULT_6M;
-    int tx4FreqHz = WSPR_DEFAULT_2M;
+    int rx0FreqHz = WSPR_DEFAULT_10M;
 
     if (argc > 1) {
         for (int i = 1; i < argc; i++) {
@@ -144,10 +148,16 @@ int main( int argc, char **argv ) {
     if (ft847_open() == -1) { return -1; }
     if (updateFiles("Startup ")) { return 1; }
 
+    for (int iii = 0; iii < MAX_NUMBER_OF_BEACONS; iii++) {    // initialize beacon data.  Really not necessary.  timestamp[] is nulled every pass, txFreqHz set to 0 in readConfigFile()
+        beaconData[iii].timestamp[0] = 0;
+        beaconData[iii].txFreqHz = 0;
+    }
+
     printf("\n\n");
     printf("<ENTER> to quit, '*'+<ENTER> to read WSPRConfig and change Rx freq, '-'+<ENTER> to terminate wait period\n");
     printf("\n");
 
+    // minCounter counts minutes from 0 to minWait.
     int minWait = MINUTES_TO_WAIT;
 #ifdef NO_WAIT_FIRST_BURST
     int minCounter = MINUTES_TO_WAIT-1;         // so it does a Tx on the next available interval
@@ -160,6 +170,19 @@ int main( int argc, char **argv ) {
         return 1;
     }
 
+    //
+    //  Main Loop
+    //
+
+    //  Each loop is one minute.  At timeout minCounter is bumped.  If less than minWait then loop.  Once the beacons begin, timing is done within txWspr() with a call
+    //      to waitForTopOfEvenMinute().  When it emerges from the beacon block (all the calls to txWspr()) minCounter is set to 0.
+    //  However, within that beacon block minWait is initialized to MINUTES_TO_WAIT and then dropped by 4 minutes with each beacon sent.  After the last beacon
+    //      it is dropped by two more minutes for WSPRNet.org collections.  So when the beacon block ends, minCounter == 0 and minWait has the number of
+    //      minutes to wait until the next beacon block.
+    //  It goes off every 28 minutes because -  MINUTES_TO_WAIT == 29.  minWait is set to MINUTES_TO_WAIT just before each beacon block begins.  After each individual
+    //      beacon is sent minWait -= 4.  After doCurl() minWait -= 2.  If there are four beacons then when the beacon block is complete, although minWait has dropped 18
+    //      minutes, only 16 minutes have elapsed since the first beacon began.  Now minWait == 11 so by the time minCounter == minWait 27 minutes have elapsed since the
+    //      first beacon.  The loop then drops into the beacon block with one minute left.  The first call to txWspr() consumes that minute.
     while (terminate == 0) {
         if (minCounter == 0) {
             printf("Wait %d min (<ENT>, *<ENT>, -<ENT>): ",minWait);  fflush( (FILE *)NULL );
@@ -169,7 +192,7 @@ int main( int argc, char **argv ) {
         tv.tv_usec = 0;
 
         FD_ZERO(&rfds);
-        FD_SET(0, &rfds);       //  stdin
+        FD_SET(0, &rfds);       //  stdin is the only thing needed.  Mostly select() is just a sleep(60 sec) statement
 
         retval = select(/*(sock + 1)*/ 1, &rfds, NULL, NULL, &tv);
         if (retval < 0) {
@@ -191,7 +214,7 @@ int main( int argc, char **argv ) {
                         if (45 == iii) {            // if '-' then cut the wait time short
                             minCounter = minWait;
                         } else if (42 == iii) {     // if '*' then read the config file and change Rx freq
-                            if (readConfigFile( &rx0FreqHz, &tx1FreqHz, &tx2FreqHz, &tx3FreqHz, &tx4FreqHz ) || (ft847_writeFreqHz( rx0FreqHz ))) {
+                            if (readConfigFile( &rx0FreqHz, beaconData ) || (ft847_writeFreqHz( rx0FreqHz ))) {
                                 retval = -1;
                                 break;
                             }
@@ -204,56 +227,118 @@ int main( int argc, char **argv ) {
                 }           //  if (NumBytesIn > 0)
             }             //  else if (FD_ISSET(0, &rfds))    //  stdin
         }               //  else <select returned without error or timeout>
+
         //  If just timeout
         minCounter++;
         if (minCounter < minWait) {
             printf("%0d ",minCounter);  fflush( (FILE *)NULL );
         } else {
-            if (readConfigFile( &rx0FreqHz, &tx1FreqHz, &tx2FreqHz, &tx3FreqHz, &tx4FreqHz )) {
+            int beaconWasSent = 0;
+            int beaconCounter = 0;
+            int heatWaitInLog = 0;
+            int heatWaitPowerOff = 0;
+
+            //
+            //  Read the config file and prepare for the beacons
+            //
+            if (readConfigFile( &rx0FreqHz, beaconData )) {
                 retval = -1;    // on error or if rx0FreqHz == 0
                 break;
             }
-            printf("\nRx %d   Tx1 %d   Tx2 %d   Tx3 %d   Tx3 %d\n",rx0FreqHz, tx1FreqHz, tx2FreqHz, tx3FreqHz, tx4FreqHz );
-            if (ft847_writeFreqHz( rx0FreqHz )) {                 // set radio to newly read frequency.  It happens again at the end of txWspr() but I frequently don't want to wait.
+            if (ft847_writeFreqHz( rx0FreqHz )) {                 // set radio to newly read frequency.  It happens again at the end of txWspr() but I don't want to wait.
                 retval = -1;    // on error or if rx0FreqHz == 0
                 break;
             }
-            timestamp1[0] = timestamp2[0] = timestamp3[0] = timestamp4[0] = 0;      // zero out timestamp strings in case tx1/tx2/tx3/tx4FreqHz is zero
+            printf("Rx %d\nTx ",rx0FreqHz );
+            for (int iii = 0; iii < MAX_NUMBER_OF_BEACONS; iii++) {         // zero out timestamp strings
+                beaconData[iii].timestamp[0] = 0;
+                if (beaconData[iii].txFreqHz != 0) {
+                    printf("%d  ",beaconData[iii].txFreqHz);
+                }
+            }
+            printf("\n");
             minWait = MINUTES_TO_WAIT;
-            if (tx1FreqHz != 0) {
-                if (txWspr(rx0FreqHz, tx1FreqHz, timestamp1)) {
+
+            //
+            //  Before starting the beacon block check here if temperature is > 90 deg.  If so wait.
+            //
+            heatWait = 0;
+            printf("\n");
+            while (terminate == 0) {
+                double currentTemperature = getTempData();
+                if (currentTemperature < TEMPERATURE_BEACON_MAX) { //  This will capture errors also.  getTempData() returns -1.0 on error and +1.0 if process not running.
+                    break;
+                } else {
+                    // decide whether to turn FT847 power off.  Turn off > 95 but don't turn back on until < 91.
+                    if (heatWaitPowerOff) {                                             // if FT847 is powered OFF ...
+                        if (currentTemperature < TEMPERATURE_HYSTERESIS_BOTTOM) {       //   and the box has cooled 4 degrees ...
+                            heatWaitPowerOff = 0;                                       //   clear flag and power the FT847 back up.
+                            if ( powerOnOffFT847(1) ) { terminate = 1; break; }         // Power On - assume gpio23 is already set up
+                            //system("echo \"1\" > /sys/class/gpio/gpio23/value");        // Power On - assume gpio23 is already set up
+                            if (updateFiles("HeatWait")) { retval = -1; }               // Insert another HeatWait message into log
+                        }
+                    } else {                                                            // if FT847 is powered ON
+                        if (currentTemperature > TEMPERATURE_POWER_OFF) {               //    and the box is above 95 degrees
+                            heatWaitPowerOff = 1;                                       //    set flag and power the FT847 off
+                            if ( powerOnOffFT847(0) ) { terminate = 1; break; }         //  Power OFF
+                            //system("echo \"0\" > /sys/class/gpio/gpio23/value");        //  Power OFF
+                            if (updateFiles("HeatOff ")) { retval = -1; }
+                        } else {                                                        // if (90 < temperature < 95) AND (FT847 powered on).
+                            if (heatWaitInLog == 0) {                                   //    just check if a log file entry needs to be made.
+                                if (updateFiles("HeatWait")) { retval = -1; }
+                                heatWaitInLog = 1;
+                            }
+                        }
+                    }
+                    // print message on the screen
+                    if (heatWaitPowerOff) {
+                        printf("\rTemperature too high: %3.3lf F.  Waiting two minutes (%d min) with power OFF",currentTemperature,heatWait);
+                    } else {
+                        printf("\rTemperature too high: %3.3lf F.  Waiting two minutes (%d min)               ",currentTemperature,heatWait);
+                    }
+                    fflush(stdout);
+                    // wait two minutes.
+                    for (int kkk = 0; kkk < 120; kkk++) {
+                        sleep(1);
+                        if (terminate) {
+                            break;
+                        }
+                    }
+                    heatWait += 2;
+                }
+            }
+            if (heatWait > 0) {
+                printf("\n");
+            }
+
+            //
+            //  Send beacons
+            //
+            while (terminate == 0) {
+                //  Quit if done.  All unused beaconData[] entries are zero and are all at end of array so quit on first zero.
+                if (beaconData[ beaconCounter ].txFreqHz == 0) {
+                    break;
+                }
+
+                //  Send beacon.  Fill in timestamp
+                if (txWspr(rx0FreqHz, beaconData[beaconCounter].txFreqHz, beaconData[beaconCounter].timestamp)) {
                     retval = -1;
                     break;
                 }
                 minWait -= 4;
+                beaconWasSent = 1;
+                beaconCounter++;
             }
-            if (tx2FreqHz != 0) {
-                if (txWspr(rx0FreqHz, tx2FreqHz, timestamp2)) {
-                    retval = -1;
-                    break;
-                }
-                minWait -= 4;
-            }
-            if (tx3FreqHz != 0) {
-                if (txWspr(rx0FreqHz, tx3FreqHz, timestamp3)) {
-                    retval = -1;
-                    break;
-                }
-                minWait -= 4;
-            }
-            if (tx4FreqHz != 0) {
-                if (txWspr(rx0FreqHz, tx4FreqHz, timestamp4)) {
-                    retval = -1;
-                    break;
-                }
-                minWait -= 4;
-            }
-            if ( (tx1FreqHz != 0) || (tx2FreqHz != 0) || (tx3FreqHz != 0) || (tx4FreqHz != 0) ) {   // if a beacon was sent
+
+            //
+            // if a beacon was sent then wait two minutes and collect data from WSPRNet.org
+            //
+            if ( beaconWasSent ) {
                 if (waitForTopOfEvenMinute( 0 )) {                                                  // ... wait for two more minutes
                     retval = -1;
                     break;
                 }
-                if (doCurl( timestamp1, timestamp2, timestamp3, timestamp4, termPTSNum )) {         // ... and get results from wsprnet.org
+                if (doCurl( beaconData, termPTSNum )) {         // ... and get results from wsprnet.org
                     retval = -1;
                     break;
                 }
@@ -281,33 +366,33 @@ static int txWspr( int rxFreq, int txFreq, char* timestamp ) {
     struct tm *info;
     time_t rawtime;         // time_t is long integer
 
-    if (waitForTopOfEvenMinute( txFreq )) {
-        return 1;
-    }
-
-    //  Update files with a burst message based on the frequency
-    if (txFreq > 144000000) {
-        strcpy( string, "Burst2m " );
-    } else if (txFreq > 50000000) {
-        strcpy( string, "Burst6m " );
-    } else if (txFreq > 28000000) {
-        strcpy( string, "Burst10m" );
-    } else {
-        strcpy( string, "Burst15m" );
-    }
-    if (updateFiles(string)) { return 1; }
-
-    //  Put radio in Tx mode and put SDRPlay into Tx mode
-    if (ft847_FETMOXOn()) { return 1; }
-    if (sendUDPMsg( 1 )) { return 1; }
-
     if (txFreq > 144000000) {
         gain = 0.8;
-    } else if (txFreq > 50000000) {                // set gain based on freq: 0.8 for 2m, 0.6 for 6m and 1.0 for 10m/15m
+    } else if (txFreq > 50000000) {                 // set gain based on freq: 0.8 for 2m, 0.6 for 6m and 1.0 for 10m/15m, an FT847 quirk.
+        double dtemperature = getTempData();
+        if ( (dtemperature > 50.0) && (dtemperature < 90.0) ) {
+            //  The FT847 tends down in freq as the temperature goes up and vice versa.  Compensate.
+            if (dtemperature > 84.0) { txFreq = 50293160; }         // 86 deg 50293.160 puts the beacon in the middle of the 200 Hz WSPR passband
+            else if (dtemperature > 81.0) { txFreq = 50293130; }    // 82 deg 50293.130
+            else if (dtemperature > 77.0) { txFreq = 50293100; }    // 79 deg 50293.100
+            else if (dtemperature > 73.0) { txFreq = 50293080; }    // 75 deg 50293.080
+            else if (dtemperature > 69.0) { txFreq = 50293060; }    // 71 deg 50293.060
+            else if (dtemperature > 62.0) { txFreq = 50293040; }    // 65 deg 50293.040
+            else { txFreq = 50293020; }                             // 60 deg 50293.020 but good at 55 deg.
+        }
         gain = 0.6;
     } else {
         gain = 1.0;
     }
+
+
+    if (waitForTopOfEvenMinute( txFreq )) {
+        return 1;
+    }
+
+    //  Put radio in Tx mode and put SDRPlay into Tx mode
+    if (ft847_FETMOXOn()) { return 1; }
+    if (sendUDPMsg( 1 )) { return 1; }
 
     time( &rawtime );
     info = gmtime( &rawtime );      // UTC
@@ -317,6 +402,20 @@ static int txWspr( int rxFreq, int txFreq, char* timestamp ) {
     if (iii) {
         printf("Error on sendWSPRData()\n");
     }
+
+    //  Update files with a burst message based on the frequency
+    if (txFreq > 144000000) {
+        strcpy( string, "Burst2m " );
+    } else if (txFreq > 50000000) {
+        strcpy( string, "Burst6m " );
+    } else if (txFreq > 28000000) {
+        strcpy( string, "Burst10m" );
+    } else if (txFreq > 24000000) {
+        strcpy( string, "Burst12m" );
+    } else {
+        strcpy( string, "Burst15m" );
+    }
+    if (updateFiles(string)) { return 1; }
 
     //  Take radio and SDRPlay out of Tx mode
     if (sendUDPMsg( 0 )) { return 1; }
@@ -452,6 +551,7 @@ static int updateFiles( char *eventName ) {
     time_t rawtime;
     struct tm *info;
     char timestamp[64];
+    double currentTemperature;
 
     static FILE* logFile;       // always open for append
     const char* LOG_FILENAME = "log_twspr.txt";
@@ -465,7 +565,8 @@ static int updateFiles( char *eventName ) {
         printf("Unable to open %s for append.\n",LOG_FILENAME);
         return 1;
     }
-    fprintf( logFile, "%s  %ld   %s \n", eventName, rawtime, timestamp);
+    currentTemperature = getTempData();
+    fprintf( logFile, "%s  %ld   %s  %3.3lf F\n", eventName, rawtime, timestamp, currentTemperature);
     fclose(logFile);
     return 0;
 }
@@ -477,23 +578,24 @@ static int updateFiles( char *eventName ) {
 //          rx0FreqHz not within 1.8 MHz - 450 MHz
 //          tx1FreqHz, tx2FreqHz, tx3FreqHz, or tx4FreqHz not a frequency (not all numbers).  If not WSPR freq
 //              then the frequency will be zero and no beacon will take place but no error returned.
-static int readConfigFile( int *rx0FreqHz, int *tx1FreqHz, int *tx2FreqHz, int *tx3FreqHz, int *tx4FreqHz ) {
+static int readConfigFile( int *rxFreqHz, struct BeaconData *beaconData ) {
     FILE *fptr;
     char *cc, string[64];
     int convResult = 0;
+    int numBeacons = 0;
 
     //  If file is missing then it is not an error.  Just continue to use the current values.
-    //  If file is present then new values will be assigned to all three parameters.  However it is only an error if rx0FreqHz is zero.
-    //  If tx1/tx2/tx3/tx4FreqHz are present then the values must match WSPR values.  Anything else or any error on conversion will cause
-    //      tx1/tx2/tx3/tx4FreqHz to be set to zero but no error will be returned.
+    //  If file is present then new values will be assigned to all parameters.  However it is only an error if rxFreqHz is zero.
+    //  If txFreqHz are present then the values must match WSPR values.  Anything else or any error on conversion will cause
+    //      beaconData->txFreqHz to be set to zero but no error will be returned.
     //
     //      The format of the lines is:
-    //          rx0FreqHz xxxxxxxx
-    //          tx1FreqHz xxxxxxxx
-    //          tx2FreqHz xxxxxxxx
-    //          tx3FreqHz xxxxxxxx
-    //          tx4FreqHz xxxxxxxx
-    //      The rx0/tx1/tx2/tx3/tx4FreqHz must start on the first character of the line.
+    //          rxFreqHz xxxxxxxx
+    //          txFreqHz xxxxxxxx
+    //          txFreqHz xxxxxxxx
+    //          txFreqHz xxxxxxxx
+    //          txFreqHz xxxxxxxx
+    //      The tokens (rxFreqHz or txFreqHz) must start on the first character of the line.
     //      The frequency must be in Hz and can be be as short as 7 digits (<10 MHz) or as long as 10 digits (144 or 432 MHz)
     //      Lines without this format can be present but will be ignored.
 
@@ -501,52 +603,44 @@ static int readConfigFile( int *rx0FreqHz, int *tx1FreqHz, int *tx2FreqHz, int *
     if (fptr == (FILE *)NULL) {
         return 0;           // no error
     }
-    *rx0FreqHz = *tx1FreqHz = *tx2FreqHz = *tx3FreqHz = *tx4FreqHz = 0;   // no going back.  Must get something assigned.
+
+    *rxFreqHz = 0;
+    for (int iii = 0; iii < MAX_NUMBER_OF_BEACONS; iii++ ) {        // no going back.  Must get something assigned.
+        beaconData[iii].txFreqHz = 0;
+    }
+
     while (!feof(fptr)) {
+        if (numBeacons == MAX_NUMBER_OF_BEACONS) {
+            break;
+        }
+
         cc = fgets( string, 64, fptr );         // read one line of the file
         if (cc == (char *)NULL) {
             break;
         }
-        if (strlen(string) < 17) {      // token (rx0/tx1/tx2/tx3/tx4FreqHz) always 9 characters + at least one space + at least 7 characters for the freq.
+        if (strlen(string) < 16) {      // token (rx/tx1/tx2/tx3/tx4FreqHz) always 8 characters + at least one space + at least 7 characters for the freq.
             continue;
         }
-        string[9] = 0;    // null terminate right after the token
-        if (!strcmp(string,"rx0FreqHz")) {
+        string[8] = 0;    // null terminate right after the token
+        if (!strcmp(string,"rxFreqHz")) {
             int convResult = readConfigFileHelp( &string[10] );
             if ( convResult < 0) {  break;  }       // error - quit
             if ((convResult >= 1800000) && (convResult <= 450000000)) {
-                *rx0FreqHz = convResult;
+                *rxFreqHz = convResult;
             }
-        } else if (!strcmp(string,"tx1FreqHz")) {
+        } else if (!strcmp(string,"txFreqHz")) {
             int convResult = readConfigFileHelp( &string[10] );
             if ( convResult < 0) {  continue;  }    //  error - read the next line, if any.
             if ( readConfigFileWSPRFreq( convResult ) == 0 ) {
-                *tx1FreqHz = convResultOrAdjust( convResult );
-            }
-        } else if (!strcmp(string,"tx2FreqHz")) {
-            int convResult = readConfigFileHelp( &string[10] );
-            if ( convResult < 0) {  continue;  }    //  error - read the next line, if any.
-            if ( readConfigFileWSPRFreq( convResult ) == 0 ) {
-                *tx2FreqHz = convResultOrAdjust( convResult );
-            }
-        } else if (!strcmp(string,"tx3FreqHz")) {
-            int convResult = readConfigFileHelp( &string[10] );
-            if ( convResult < 0) {  continue;  }    //  error - read the next line, if any.
-            if ( readConfigFileWSPRFreq( convResult ) == 0 ) {
-                *tx3FreqHz = convResultOrAdjust( convResult );
-            }
-        } else if (!strcmp(string,"tx4FreqHz")) {
-            int convResult = readConfigFileHelp( &string[10] );
-            if ( convResult < 0) {  continue;  }    //  error - read the next line, if any.
-            if ( readConfigFileWSPRFreq( convResult ) == 0 ) {
-                *tx4FreqHz = convResultOrAdjust( convResult );
+                beaconData[numBeacons++].txFreqHz = convResultOrAdjust( convResult );
             }
         }
     }
 
     clearerr(fptr);
     fclose(fptr);
-    if (*rx0FreqHz == 0) {
+    printf("\n\nNumber of beacons %d\n",numBeacons);
+    if (*rxFreqHz == 0) {
         return -1;
     } else if (convResult < 0) {
         return -1;
@@ -567,7 +661,7 @@ static int readConfigFile( int *rx0FreqHz, int *tx1FreqHz, int *tx2FreqHz, int *
     When the frequency is outside the +/-100 Hz WSPR passband then sometimes a sidelobe will be reported.  That can still be effective at
         moving the frequency back.
 
-    TODO - perhaps after four straight non-reports we reset last2mFreq to zero and go back to returning convResult.
+    TODO - Consider getting rid 2m compensation based on n3izn freq and substitute one based on temperature.
 */
 static int convResultOrAdjust( int convResult ) {
     static int last2mFreq = 0;
@@ -620,7 +714,9 @@ static int convResultOrAdjust( int convResult ) {
 //  Verify that the frequency is a WSPR frequency.  Returns 0 if so and -1 if not.  Note that I'm not checking for one freq on each band.  So
 //      there is noting to stop me from sending a WSPR message on the same frequency several times in a row.
 static int readConfigFileWSPRFreq( int convResult ) {
+    if ( readConfigFileWSPRFreqHelp( convResult, WSPR_17M ) == 0 ) { return 0; }
     if ( readConfigFileWSPRFreqHelp( convResult, WSPR_15M ) == 0 ) { return 0; }
+    if ( readConfigFileWSPRFreqHelp( convResult, WSPR_12M ) == 0 ) { return 0; }
     if ( readConfigFileWSPRFreqHelp( convResult, WSPR_10M ) == 0 ) { return 0; }
     if ( readConfigFileWSPRFreqHelp( convResult, WSPR_6M ) == 0 ) { return 0; }
     if ( readConfigFileWSPRFreqHelp( convResult, WSPR_2M ) == 0 ) { return 0; }
