@@ -23,7 +23,8 @@ int ft847_writeFreqHz( int freq );
 
 static int serline = -1;                        // Linux port for the serial line.  Needed in select() and ioctl() although ft847_create() returns it.
 static int GPIOInit = -1;
-static const char *SerName = "/dev/ttyUSB0";
+//static const char *SerName = "/dev/ttyUSB0";
+static const char *SerName = "/dev/ttyUSBFT847";    // udev rule set up because the tty port started changing from ttyUSB0 to ttyUSB1
 static struct termios OriginalTTYSettings;
 //static unsigned char Buffer[BUFFER_SIZE];
 //static int currentScreenOn = -1;
@@ -142,9 +143,20 @@ static int ft847_CATOff( void ) {
 //  made into a function to encapsulate the error messages.  Returns 0 if ok, -1 on write error.
 //      The paramater msg[] contains the message to write.
 static int ft847_write( unsigned char* msg, char* funcName ) {
+  int iii;
+
   if (ft847_writeMsg( msg )) {
-    printf("%s() write command error\n",funcName);
-    return -1;
+    ft847_close();                  // frequent problem is that ttyUSB0 becomes ttyUSB1.  There is a ttyUSBFT847 which always points to the correct one (udev rule).
+    iii = ft847_open();             //    So if error then close/open and try again.  "dmesg | grep ttyUSB" will tell me if it has switched.
+    if (iii == -1) {
+      printf("%s() write command error 1\n",funcName);
+      return -1;
+    }
+    iii = ft847_writeMsg( msg );
+    if (iii) {
+      printf("%s() write command error 2,  %d\n",funcName,iii);
+      return -1;
+    }
   }
   return 0;
 }
