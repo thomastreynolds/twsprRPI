@@ -14,6 +14,7 @@
 #include <signal.h>
 #include <string.h>
 #include <stdlib.h>
+#include "twsprRPI.h"
 
 #define START_OF_LINE1  "<tr id=\"evenrow\">"
 #define START_OF_LINE2  "<tr id=\"oddrow\">"
@@ -35,7 +36,6 @@
 
 extern void azdist_(char* MyGrid, char* HisGrid,            // would normally be in a .h file but this is the only place that calls it.
                     int* nAz, int* nDmiles, int* nDkm);
-extern int sendUDPEmailMsg( char *message );
 
 
 struct Entry {
@@ -55,24 +55,34 @@ char *goldenCalls[] = { "K1RA-PI", "WA2ZKD", "KK6PR", "KA7OEI-1", "KPH", "KP4MD"
 #define NUM_OF_GOLDEN_CALLS 9   // do this because "size_t n = sizeof(a) / sizeof(int);" won't work sinceh each element is a different size.
 
 //int tone28MHz = 1470;                  // filled in by twsprRPI.c inside getWavFilename(), value assigned here is just for linker when this file runs stand alone
-double n3iznFreq = 0.0;
 
-int doCurl( char* date1, char* date2, char* date3, char* date4, char* termPTSNum );
+int doCurl( struct BeaconData *beaconData, char* termPTSNum );
 
 static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, char *thedate );
-static int parseHTMLLine( char *string, char *date1, char *date2, char *date3, char *date4, Entry **entry, int *numEntries, char *thedate );
+static int parseHTMLLine( char *string, struct BeaconData *beaconData, int numBeacons, Entry **entry, int *numEntries, char *thedate, int *numberOfDuplicates );
 static char* parseHTMLTag( char *string, char *field );
 static void doOneGrid( char *his, int *nAz, int *nDmiles );
 
-int doCurl( char* date1, char* date2, char* date3, char* date4, char* termPTSNum ) {
+int doCurl( struct BeaconData *beaconData, char* termPTSNum ) {
     FILE *fptr;
     char *cc, string[4096];
     int returnValue = 0;
     Entry *entries[MAX_ENTRIES];
     int numEntries = 0;
     char thedate[64];
+    int numBeacons;
+    int numberOfDuplicates;
+    int iii;
 
-    date1[5] = date2[5] = date3[5] = date4[5] = 0;    // the dates passed are in HR:MN:SC so remove the :SC
+    //  Out of the structure beaconData really only need the timestamp.  Remove the seconds from the timestamp string.  It should already be removed, just in case.
+    for (iii = 0; iii < MAX_NUMBER_OF_BEACONS; iii++) {
+        //printf("--- %s ---\n",beaconData[iii].timestamp);
+        if ( strlen(beaconData[iii].timestamp) > 5) {       // they should all have length == 0 or 5
+            beaconData[iii].timestamp[5] = 0;               // the dates passed are in HR:MN:SC so remove the :SC
+        }
+    }
+    numBeacons = iii;
+    numberOfDuplicates = 0;
 
     system("curl -s -d \"mode=html&band=all&limit=600&findcall=nq6b&findreporter=&sort=date\" http://www.wsprnet.org/olddb -o x.txt");
 
@@ -86,23 +96,27 @@ int doCurl( char* date1, char* date2, char* date3, char* date4, char* termPTSNum
         if (cc == (char *)NULL) {
             break;
         }
-        if ((strncmp( string, START_OF_LINE1, strlen(START_OF_LINE1) ) == 0) || (strncmp( string, START_OF_LINE2, strlen(START_OF_LINE2) ) == 0))  {
+        //if ((strncmp( string, START_OF_LINE1, strlen(START_OF_LINE1) ) == 0) || (strncmp( string, START_OF_LINE2, strlen(START_OF_LINE2) ) == 0))  {
+        if (strstr( string, START_OF_LINE1) || strstr( string, START_OF_LINE2) )  {
             //printf("%s",string);
-            if (parseHTMLLine( string, date1, date2, date3, date4, entries, &numEntries, thedate ) ) {
+            if (parseHTMLLine( string, beaconData, numBeacons, entries, &numEntries, thedate, &numberOfDuplicates ) ) {
                 //returnValue = -1;
                 break;
             }
         }
     }
 
+    //  The output of the above curl statement and file read is entries[], a list of all the station that heard this beacon, with duplicates removed.
+    //      Now display them.
     processEntries( entries, &numEntries, termPTSNum, thedate );
 
-    for (int iii = 0; iii < numEntries; iii++) {
+    for (iii = 0; iii < numEntries; iii++) {
         if (entries[iii] != (Entry *)NULL) {
             free( entries[iii] );
         }
     }
     printf("Num entries %d\n",numEntries);
+    printf("Num duplicates %d\n",numberOfDuplicates);
 
     fclose(fptr);
     return returnValue;
@@ -169,8 +183,8 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
 
             //  Set terminal to stdout unless ( 21 MHz AND a /dev/pts/XX number was input on the command line )
             terminal = stdout;
-            if (entryFreq > 21.0) {
-                if (entryFreq < 22.0) {             //  if 15m entry ...
+            if (entryFreq > 18.0) {
+                if (entryFreq < 22.0) {             //  if 15m or 17m entry ...
                     if (remoteTerminal) {           //  ... and if user imput a PTS number on the command line
                         terminal = remoteTerminal;  //  ... then write to that terminal.
                     }
@@ -219,7 +233,12 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
             //  2 meter adjustment attempt.
             if (entryFreq > 144.0) {                                        // if 2m ...
                 if (strcmp("N3IZN/SDR",entries[iii]->reporter) == 0) {      // and if N3IZN report ...
-                    n3iznFreq = entryFreq;                                  // then get reported freq as double.
+                    int snrInt;                                             // and not a sidelobe
+                    if (sscanf(entries[iii]->snr,"%d",&snrInt)) {                   // sscanf() should return 1
+                        if (snrInt > -18) {
+                            n3iznFreq = entryFreq;                          // then get reported freq as double.
+                        }
+                    }
                 }
             }
 
@@ -305,7 +324,7 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
 }
 
 
-static int parseHTMLLine( char *string, char *date1, char *date2, char *date3, char *date4, Entry **entry, int *numEntries, char *thedate ) {
+static int parseHTMLLine( char *string, struct BeaconData *beaconData, int numBeacons, Entry **entry, int *numEntries, char *thedate, int *numberOfDuplicates ) {
     /*
        <td align=left>&nbsp;2022-01-18 23:22&nbsp;</td>
        <td align=left>&nbsp;NQ6B&nbsp;</td>
@@ -324,11 +343,11 @@ static int parseHTMLLine( char *string, char *date1, char *date2, char *date3, c
     char *cc,*cc1;
     char field[128];
     char timestamp[64],freq[64],snr[64],drift[64], reporter[64], reporterLocation[64], distance[64],azimuth[64],distance2[64];
-
+    int done;
 
     //  Find beginning of first <td> tag
     cc = strstr(string,"<td align=");
-    if (cc == (char *)NULL) { return -1; }
+    if (cc == (char *)NULL) { return 0; }       // don't return -1 (error).  Just let it continue through the rest of the HTML code.
 
     //  Get timestamp
     cc = parseHTMLTag( cc, field );    if (cc == (char *)-1) { return -1; }
@@ -337,9 +356,19 @@ static int parseHTMLLine( char *string, char *date1, char *date2, char *date3, c
     *cc1 = 0;   strcpy(thedate, field);     // retrieve date for below.
 
     //  Since they are in chronological order the first line that doesn't match any of the timestamps is the last one needed.
-    if (strcmp(timestamp,date1) && strcmp(timestamp,date2) && strcmp(timestamp,date3) && strcmp(timestamp,date4)) {
+    done = 1;
+    for (int jjj = 0; jjj < numBeacons; jjj++) {
+        if (strcmp(timestamp,beaconData[jjj].timestamp) == 0) {
+            done = 0;
+            break;
+        }
+    }
+    if (done) {
         return -1;
     }
+    //if (strcmp(timestamp,date1) && strcmp(timestamp,date2) && strcmp(timestamp,date3) && strcmp(timestamp,date4)) {
+    //    return -1;
+    //}
 
     //  Next field is my call, ignore it.
     cc = parseHTMLTag( cc, field );    if (cc == (char *)-1) { return -1; }
@@ -412,6 +441,7 @@ static int parseHTMLLine( char *string, char *date1, char *date2, char *date3, c
                         strcpy(entry[iii]->snr,snr);
                     }
                     //printf("d   %s %10s  %3s %2s  %10s   %6s %5s\n",timestamp, freq, snr, drift, reporter, reporterLocation, distance);
+                    (*numberOfDuplicates)++;
                     break;
                 }
             }
@@ -499,12 +529,23 @@ static void doOneGrid( char *his, int *nAz, int *nDmiles ) {
 //#define MAIN_HERE 1
 #ifdef MAIN_HERE
 
+double n3iznFreq;
+
 int main() {
-    char date0[] = "05:12";
-    char date1[] = "05:08";
-    char date2[] = "05:04";
-    char date3[] = "05:00";
-    return doCurl( date3, date2, date1, date0, "" );
+    struct BeaconData beaconData[ MAX_NUMBER_OF_BEACONS ];
+
+    for (int iii = 0; iii < MAX_NUMBER_OF_BEACONS; iii++) {
+        beaconData[iii].timestamp[0] = 0;
+        beaconData[iii].txFreqHz = 0;
+    }
+    strcpy(beaconData[0].timestamp,"13:26");
+    beaconData[0].txFreqHz = 20194630;
+    strcpy(beaconData[1].timestamp,"13:30");
+    beaconData[1].txFreqHz = 24924630;
+    strcpy(beaconData[2].timestamp,"13:34");
+    beaconData[2].txFreqHz = 28124640;
+
+    return doCurl( beaconData, "" );
 }
 
 
