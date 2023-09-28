@@ -1,5 +1,5 @@
 /*
-    gcc -g -Wall -o twsprRPI twsprRPI.c wav_output3.c ft847.c wsprnet.c azdist.c geodist.c grid2deg.c getTempData.c -lportaudio -lrt -lm -lasound -pthread
+    gcc -g -Wall -o twsprRPI twsprRPI.c wav_output3.c ft847.c wsprnet.c azdist.c geodist.c grid2deg.c getTempData.c -lrt -lm -lasound -pthread
 
     When running direct stderr to null with
         ./twsprRPI 2>/dev/null
