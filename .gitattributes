@@ -1,0 +1,19 @@
+# Set the default behavior, in case people don't have core.autocrlf set.  All files not specified 
+#   will be set to the default line endings upon checkout.  I can also make it explicit with a
+#   statement like "x.xxx text".
+* text=auto
+
+# Explicitly all files that I want to have LF endings.
+*.c text eol=lf
+*.h text eol=lf
+*.txt text eol=lf
+WSPRConfig text eol=lf
+
+# Declare files that will always have CRLF line endings on checkout.
+# *.sln text eol=crlf
+
+# Denote all files that are truly binary and should not be modified.
+# *.png binary
+# *.jpg binary
+# Tom - no binary files in repository
+
