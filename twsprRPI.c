@@ -260,7 +260,7 @@ int main( int argc, char **argv ) {
             minWait = MINUTES_TO_WAIT;
 
             //
-            //  Before starting the beacon block check here if temperature is > 90 deg.  If so wait.
+            //  Before starting the beacon code block check here if temperature is > 90 deg.  If so wait.
             //
             heatWait = 0;
             printf("\n");
@@ -269,24 +269,26 @@ int main( int argc, char **argv ) {
                 if (currentTemperature < TEMPERATURE_BEACON_MAX) { //  This will capture errors also.  getTempData() returns -1.0 on error and +1.0 if process not running.
                     break;
                 } else {
-                    // decide whether to turn FT847 power off.  Turn off > 95 but don't turn back on until < 91.
+                    // decide whether to turn FT847 power off.  Turn off > 90 but don't turn back on until < 86.
                     if (heatWaitPowerOff) {                                             // if FT847 is powered OFF ...
                         if (currentTemperature < TEMPERATURE_HYSTERESIS_BOTTOM) {       //   and the box has cooled 4 degrees ...
                             heatWaitPowerOff = 0;                                       //   clear flag and power the FT847 back up.
                             if ( powerOnOffFT847(1) ) { terminate = 1; break; }         // Power On - assume gpio23 is already set up
                             //system("echo \"1\" > /sys/class/gpio/gpio23/value");        // Power On - assume gpio23 is already set up
                             if (updateFiles("HeatWait")) { retval = -1; }               // Insert another HeatWait message into log
+                            sendUDPEmailMsg( "Box below 86 deg, radio on\nBox temperature below 86 degrees, radio powered on\n" );
                         }
                     } else {                                                            // if FT847 is powered ON
-                        if (currentTemperature > TEMPERATURE_POWER_OFF) {               //    and the box is above 95 degrees
+                        if (currentTemperature > TEMPERATURE_POWER_OFF) {               //    and the box is above 90 degrees
                             heatWaitPowerOff = 1;                                       //    set flag and power the FT847 off
                             if ( powerOnOffFT847(0) ) { terminate = 1; break; }         //  Power OFF
                             //system("echo \"0\" > /sys/class/gpio/gpio23/value");        //  Power OFF
                             if (updateFiles("HeatOff ")) { retval = -1; }
-                        } else {                                                        // if (90 < temperature < 95) AND (FT847 powered on).
+                        } else {                                                        // if (85 < temperature < 90) AND (FT847 powered on).
                             if (heatWaitInLog == 0) {                                   //    just check if a log file entry needs to be made.
                                 if (updateFiles("HeatWait")) { retval = -1; }
                                 heatWaitInLog = 1;
+                                //sendUDPEmailMsg( "Box above 85 deg, beacons halted\nBox temperature above 85 deg, beacons halted.\n" );
                             }
                         }
                     }
