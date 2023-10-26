@@ -65,12 +65,7 @@
 #define NO_WAIT_FIRST_BURST     1
 #define BLACKOUT_FILENAME       "blackout.txt"
 
-//extern int sendWSPRData( char *filename, float gainX );     // would normally be in wav_output2.h but this is the only definition so just put it here.
-//extern int initializePortAudio( void );
-//extern void terminatePortAudio( void );
 extern int doCurl( struct BeaconData *beaconData, char* termPTSNum );
-
-double n3iznFreq;        // this is also the only variable definition imported from wsprnet.c
 
 int terminate = 0;
 
@@ -88,7 +83,6 @@ int sendUDPEmailMsg( char *message );
 
 
 static int readConfigFile( int *rxFreqHz, struct BeaconData *beaconData );
-static int convResultOrAdjust( int convResult );
 static int readConfigFileWSPRFreq( int convResult );
 static int readConfigFileWSPRFreqHelp( int convResult, int WSPRFreq );
 static int readConfigFileHelp( char *string );
@@ -363,17 +357,30 @@ int main( int argc, char **argv ) {
 //  This function is called as sleep ends.  It waits for the top of second and then initiates a send.
 static int txWspr( int rxFreq, int txFreq, char* timestamp ) {
     int iii;
-    float gain;
+    float gain = 1.0;
     char string[16];
     struct tm *info;
     time_t rawtime;         // time_t is long integer
 
+    //  The FT847 tends down in freq as the temperature goes up and vice versa.  Compensate.
     if (txFreq > 144000000) {
-        gain = 0.8;
+        double dtemperature = getTempData();
+        if ( (dtemperature > 50.0) && (dtemperature < 75.0) ) {     // 2m beacon won't be used if temperature > 70 deg.  It used to be 75 but dropped it.
+            //  2m pattern seems to be about 10 Hz drop for 1 deg change.  But it increases above 70 deg.
+            if (dtemperature > 74.0) { txFreq = 144489250; }
+            else if (dtemperature > 72.5) { txFreq = 144489240; }
+            else if (dtemperature > 71.0) { txFreq = 144489230; }
+            else if (dtemperature > 70.0) { txFreq = 144489220; }
+            else if (dtemperature > 68.5) { txFreq = 144489190; }
+            else if (dtemperature > 67.5) { txFreq = 144489170; }
+            else if (dtemperature > 66.5) { txFreq = 144489160; }
+            else if (dtemperature > 63.5) { txFreq = 144489140; }
+            else if (dtemperature > 61.0) { txFreq = 144489130; }
+            else { txFreq = 144489110; }                             // No data belo 62 deg, so this is a guess.
+        }
     } else if (txFreq > 50000000) {                 // set gain based on freq: 0.8 for 2m, 0.6 for 6m and 1.0 for 10m/15m, an FT847 quirk.
         double dtemperature = getTempData();
         if ( (dtemperature > 50.0) && (dtemperature < 90.0) ) {
-            //  The FT847 tends down in freq as the temperature goes up and vice versa.  Compensate.
             if (dtemperature > 84.0) { txFreq = 50293160; }         // 86 deg 50293.160 puts the beacon in the middle of the 200 Hz WSPR passband
             else if (dtemperature > 81.0) { txFreq = 50293130; }    // 82 deg 50293.130
             else if (dtemperature > 77.0) { txFreq = 50293100; }    // 79 deg 50293.100
@@ -382,11 +389,21 @@ static int txWspr( int rxFreq, int txFreq, char* timestamp ) {
             else if (dtemperature > 62.0) { txFreq = 50293040; }    // 65 deg 50293.040
             else { txFreq = 50293020; }                             // 60 deg 50293.020 but good at 55 deg.
         }
-        gain = 0.6;
-    } else {
-        gain = 1.0;
+    } else if (txFreq > 28000000) {
+        double dtemperature = getTempData();
+        if ( (dtemperature > 50.0) && (dtemperature < 90.0) ) {
+            //  The pattern on 10m seems to be for every 2 deg drop decrease the carrier frequency by 10 Hz (as FT847 drifts up).
+            if (dtemperature > 85.0) { txFreq = 28124700; }
+            else if (dtemperature > 83.0) { txFreq = 28124690; }
+            else if (dtemperature > 79.0) { txFreq = 28124680; }
+            else if (dtemperature > 78.0) { txFreq = 28124670; }
+            else if (dtemperature > 75.0) { txFreq = 28124660; }
+            else if (dtemperature > 71.0) { txFreq = 28124640; }
+            else if (dtemperature > 69.0) { txFreq = 28124630; }
+            else if (dtemperature > 65.0) { txFreq = 28124620; }
+            else { txFreq = 28124600; }                             // as of this writing 67 deg is the last data point, so this is a guess.
+        }
     }
-
 
     if (waitForTopOfEvenMinute( txFreq )) {
         return 1;
@@ -634,7 +651,11 @@ static int readConfigFile( int *rxFreqHz, struct BeaconData *beaconData ) {
             int convResult = readConfigFileHelp( &string[10] );
             if ( convResult < 0) {  continue;  }    //  error - read the next line, if any.
             if ( readConfigFileWSPRFreq( convResult ) == 0 ) {
-                beaconData[numBeacons++].txFreqHz = convResultOrAdjust( convResult );
+                // Special consideration for 2m beacon, skip it if temperature > 70 deg.
+                double currentTemperature = getTempData();
+                if ((convResult < 144000000) || (currentTemperature < 70.0)) {
+                    beaconData[numBeacons++].txFreqHz = convResult;
+                }
             }
         }
     }
@@ -649,67 +670,6 @@ static int readConfigFile( int *rxFreqHz, struct BeaconData *beaconData ) {
     } else {
         return 0;
     }
-}
-
-
-/*
-    This is an attempt to adjust the 2m beacon freq to get it close to 1500 Hz, 144.490500 MHz.  wsprnet.c captures the value of n3iznFreq,
-        a double, which is the freq N3IZN/SDR reports for my 2m beacon.  The rest is done here.  The frequency sent to the FT847 is adjusted
-        by half the error distance.  Note that ft847_writeFreqHz() rounds down to the 10 Hz resolution.
-
-    If there is no N3IZN report then the value of n3iznFreq is reset to 0.0.  In that case the last 2m frequency will be used again or, if
-        last2mFreq == 0 then convResult will be returned.
-
-    When the frequency is outside the +/-100 Hz WSPR passband then sometimes a sidelobe will be reported.  That can still be effective at
-        moving the frequency back.
-
-    TODO - Consider getting rid 2m compensation based on n3izn freq and substitute one based on temperature.
-*/
-static int convResultOrAdjust( int convResult ) {
-    static int last2mFreq = 0;
-
-    if ( readConfigFileWSPRFreqHelp( convResult, WSPR_2M ) == 0 ) {         // if 2m frequency
-        printf("\n\nN3IZN freq = %lf\n",n3iznFreq);
-        if (n3iznFreq != 0.0) {                                             //  and no offset has yet been applied.
-            double tempf;
-            int intfreq,offset;
-
-            tempf = n3iznFreq * 1000000;                // convert to Hz
-            intfreq = (int)tempf;                       // convert to integer
-            printf("n3izn freq as integer %d\n",intfreq);
-            printf("convResult %d\n",convResult);
-            printf("last2mFreq %d\n",last2mFreq);
-            offset = 144490500 - intfreq;               // negative if freq > 1500, positive is freq < 1500 (144,490,500 Hz)
-            printf("difference %d\n",offset);
-            //offset = offset / 2;                        // take offset and cut it in half.
-            printf("Proposed offset %d\n",offset);
-
-            if (last2mFreq == 0) {                      // if this is the first N3IZN result ...
-                last2mFreq = convResult+offset;         // ... then add the offset to convResult
-            }
-            else {                                      // otherwise ...
-                last2mFreq = last2mFreq+offset;         // ... then add the offset to previous freq used.
-            }
-            printf("New freq = %d\n",last2mFreq);
-            return last2mFreq;
-
-        }
-
-        else {
-            printf("last2mFreq = %d\n",last2mFreq);
-            if (last2mFreq == 0) {
-                printf("No N3IZN result, no previous freq.  Using %d\n",convResult);
-                return convResult;
-            }
-            else {
-                printf("No N3IZN result, reusing %d\n",last2mFreq);
-                return last2mFreq;
-            }
-        }
-
-    }
-
-    return convResult;      // if not 2m then just return convResult.
 }
 
 

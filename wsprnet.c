@@ -54,8 +54,6 @@ typedef struct Entry Entry;
 char *goldenCalls[] = { "K1RA-PI", "WA2ZKD", "KK6PR", "KA7OEI-1", "KPH", "KP4MD", "W7PAU", "W3ENR", "AI6VN/KH6" };
 #define NUM_OF_GOLDEN_CALLS 9   // do this because "size_t n = sizeof(a) / sizeof(int);" won't work sinceh each element is a different size.
 
-//int tone28MHz = 1470;                  // filled in by twsprRPI.c inside getWavFilename(), value assigned here is just for linker when this file runs stand alone
-
 int doCurl( struct BeaconData *beaconData, char* termPTSNum );
 
 static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, char *thedate );
@@ -125,11 +123,8 @@ int doCurl( struct BeaconData *beaconData, char* termPTSNum ) {
 
 static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, char *thedate ) {
     int num28MHz = 0;
-    //double freqs28MHz = 0.0;
     FILE *fptr, *remoteTerminal;
     int firstGolden = 0;
-
-    n3iznFreq = 0.0;
 
     if (*numEntries == 0) {
         printf("\n");
@@ -229,18 +224,6 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
                    entries[iii]->timestamp, entries[iii]->freq, entries[iii]->snr, entries[iii]->drift,
                    entries[iii]->reporter, entries[iii]->reporterLocation, entries[iii]->distance,
                    entries[iii]->azimuth, entries[iii]->distance2);
-
-            //  2 meter adjustment attempt.
-            if (entryFreq > 144.0) {                                        // if 2m ...
-                if (strcmp("N3IZN/SDR",entries[iii]->reporter) == 0) {      // and if N3IZN report ...
-                    int snrInt;                                             // and not a sidelobe
-                    if (sscanf(entries[iii]->snr,"%d",&snrInt)) {                   // sscanf() should return 1
-                        if (snrInt > -18) {
-                            n3iznFreq = entryFreq;                          // then get reported freq as double.
-                        }
-                    }
-                }
-            }
 
             //  Potentially send Email if on 6 or 2m
             {
@@ -528,8 +511,6 @@ static void doOneGrid( char *his, int *nAz, int *nDmiles ) {
 // uncomment curl() call and, if using a different curl results, change fopen (two lines below curl) back to x.txt
 //#define MAIN_HERE 1
 #ifdef MAIN_HERE
-
-double n3iznFreq;
 
 int main() {
     struct BeaconData beaconData[ MAX_NUMBER_OF_BEACONS ];
