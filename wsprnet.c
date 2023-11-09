@@ -14,6 +14,8 @@
 #include <signal.h>
 #include <string.h>
 #include <stdlib.h>
+#include <limits.h>
+#include <math.h>
 #include "twsprRPI.h"
 
 #define START_OF_LINE1  "<tr id=\"evenrow\">"
@@ -51,12 +53,15 @@ struct Entry {
 };
 typedef struct Entry Entry;
 
-char *goldenCalls[] = { "K1RA-PI", "WA2ZKD", "KK6PR", "KA7OEI-1", "KPH", "KP4MD", "W7PAU", "W3ENR", "AI6VN/KH6" };
-#define NUM_OF_GOLDEN_CALLS 9   // do this because "size_t n = sizeof(a) / sizeof(int);" won't work sinceh each element is a different size.
+char *goldenCalls[] = { "KK6PR",     "KP4MD",  "W7PAU",  "KA7OEI-1", "AC0G",
+                        "KPH",       "KV0S",   "N2HQI",  "W2ACR",    "KA7OEI/Q",
+                        "AI6VN/KH6", "K6RFT",  "KV4TT",  "W3ENR",    "K1RA-PI",
+                        "W7WKR-K2",  "KV6X",   "WA2TP" };
+#define NUM_OF_GOLDEN_CALLS 18   // do this because "size_t n = sizeof(a) / sizeof(int);" won't work since each element is a different size.
 
 int doCurl( struct BeaconData *beaconData, char* termPTSNum );
 
-static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, char *thedate );
+static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, char *thedate, int minBeacon );
 static int parseHTMLLine( char *string, struct BeaconData *beaconData, int numBeacons, Entry **entry, int *numEntries, char *thedate, int *numberOfDuplicates );
 static char* parseHTMLTag( char *string, char *field );
 static void doOneGrid( char *his, int *nAz, int *nDmiles );
@@ -71,12 +76,19 @@ int doCurl( struct BeaconData *beaconData, char* termPTSNum ) {
     int numBeacons;
     int numberOfDuplicates;
     int iii;
+    int minBeacon;      // the lowest beacon frequency
 
     //  Out of the structure beaconData really only need the timestamp.  Remove the seconds from the timestamp string.  It should already be removed, just in case.
+    minBeacon = INT_MAX;
     for (iii = 0; iii < MAX_NUMBER_OF_BEACONS; iii++) {
-        //printf("--- %s ---\n",beaconData[iii].timestamp);
+        if (beaconData[iii].txFreqHz == 0) {
+            break;
+        }
         if ( strlen(beaconData[iii].timestamp) > 5) {       // they should all have length == 0 or 5
             beaconData[iii].timestamp[5] = 0;               // the dates passed are in HR:MN:SC so remove the :SC
+        }
+        if (beaconData[iii].txFreqHz < minBeacon) {         // get lowest beacon frequency in Hz and place it in minBeacon
+            minBeacon = beaconData[iii].txFreqHz;
         }
     }
     numBeacons = iii;
@@ -106,7 +118,7 @@ int doCurl( struct BeaconData *beaconData, char* termPTSNum ) {
 
     //  The output of the above curl statement and file read is entries[], a list of all the station that heard this beacon, with duplicates removed.
     //      Now display them.
-    processEntries( entries, &numEntries, termPTSNum, thedate );
+    processEntries( entries, &numEntries, termPTSNum, thedate, minBeacon );
 
     for (iii = 0; iii < numEntries; iii++) {
         if (entries[iii] != (Entry *)NULL) {
@@ -121,10 +133,11 @@ int doCurl( struct BeaconData *beaconData, char* termPTSNum ) {
 }
 
 
-static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, char *thedate ) {
+static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, char *thedate, int minBeacon ) {
     int num28MHz = 0;
     FILE *fptr, *remoteTerminal;
     int firstGolden = 0;
+    double remoteTerminalFreq;
 
     if (*numEntries == 0) {
         printf("\n");
@@ -132,16 +145,17 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
     }
 
     remoteTerminal = (FILE *)NULL;
+    remoteTerminalFreq = 0.0;
     if (termPTSNum[0] != 0) {
         char filename[64];
 
         sprintf(filename,"/dev/pts/%s",termPTSNum);
         remoteTerminal = fopen(filename,"at");      //  Error is ok because remoteTerminal will be checked against NULL
-        /*if (remoteTerminal) {
-            printf("Using remote terminal %s.\n",filename);
-        } else {
-            printf("No remote terminal\n");
-        }*/
+
+        remoteTerminalFreq = (double)minBeacon;         // convert minBeacon to double because it is compared against a double (24924000 becomes 24924000.0)
+        remoteTerminalFreq /= 1000000;                  // convert from kHz to mHz (24924000.0 becomes 24.924000)
+        remoteTerminalFreq = floor(remoteTerminalFreq); // remove everything after decimal (24.924000 becomes 24.000000)
+        remoteTerminalFreq += 1.0;                      // add one because the comparison below is for all freqs below this value (24.000000 becomes 25.000000)
     }
 
     fptr = fopen(RAW_LOG_NAME,"at");
@@ -178,11 +192,9 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
 
             //  Set terminal to stdout unless ( 21 MHz AND a /dev/pts/XX number was input on the command line )
             terminal = stdout;
-            if (entryFreq > 18.0) {
-                if (entryFreq < 22.0) {             //  if 15m or 17m entry ...
-                    if (remoteTerminal) {           //  ... and if user imput a PTS number on the command line
-                        terminal = remoteTerminal;  //  ... then write to that terminal.
-                    }
+            if (entryFreq < remoteTerminalFreq) {   //  if entry is on the lowest beacon frequency band ...
+                if (remoteTerminal) {               //  ... and if user imput a PTS number on the command line
+                    terminal = remoteTerminal;      //  ... then write to that terminal.
                 }
             }
 
@@ -262,43 +274,47 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
     //  Print out the "golden callsigns".  The ones that, from observation, seem to be GPS controlled because they are almost always reporting the same frequency.
     for (int iii = 0; iii < *numEntries; iii++) {
         if (entries[iii] != (Entry *)NULL) {
-            int tempInt;
-            FILE *terminal= stdout;
-            int printThisLine = 0;
+            double entryFreq;
+            sscanf(  entries[iii]->freq, "%lf", &entryFreq );
+            if (entryFreq > 24.0) {        // only print out golden freqs on 12m and above
+                int tempInt;
+                FILE *terminal= stdout;
+                int printThisLine = 0;
 
-            for (int jjj = 0; jjj < NUM_OF_GOLDEN_CALLS; jjj++) {
-                int sss = strcmp(entries[iii]->reporter, goldenCalls[jjj]);
-                if (sss == 0) {
-                    printThisLine = 1;
-                    break;
-                }
-            }
-
-            if (printThisLine) {
-                if (firstGolden == 0) {
-                    firstGolden = 1;
-                    fprintf(terminal,"\n");
-                }
-
-                //  This block of code just determines what color to print the line with.
-                sscanf( entries[iii]->distance, "%d", &tempInt );
-                if (tempInt > 3000) {                                   // if distance > 3000 then print green
-                    fprintf(terminal,GREEN);
-                } else {
-                    sscanf( entries[iii]->snr, "%d", &tempInt );
-                    if (tempInt >= 0) {                                 // if snr >= 0 then print blue
-                        fprintf(terminal,BLUE);
+                for (int jjj = 0; jjj < NUM_OF_GOLDEN_CALLS; jjj++) {
+                    int sss = strcmp(entries[iii]->reporter, goldenCalls[jjj]);
+                    if (sss == 0) {
+                        printThisLine = 1;
+                        break;
                     }
                 }
 
-                //  print the line
-                fprintf(terminal,"   %s %10s  %3s %2s  %10s   %6s  %5s mi  %3s deg  (%s mi)\n",
-                       entries[iii]->timestamp, entries[iii]->freq, entries[iii]->snr, entries[iii]->drift,
-                       entries[iii]->reporter, entries[iii]->reporterLocation, entries[iii]->distance,
-                       entries[iii]->azimuth, entries[iii]->distance2);
+                if (printThisLine) {
+                    if (firstGolden == 0) {
+                        firstGolden = 1;
+                        fprintf(terminal,"\n");
+                    }
 
-                //  reset the color
-                fprintf(terminal,END);
+                    //  This block of code just determines what color to print the line with.
+                    sscanf( entries[iii]->distance, "%d", &tempInt );
+                    if (tempInt > 3000) {                                   // if distance > 3000 then print green
+                        fprintf(terminal,GREEN);
+                    } else {
+                        sscanf( entries[iii]->snr, "%d", &tempInt );
+                        if (tempInt >= 0) {                                 // if snr >= 0 then print blue
+                            fprintf(terminal,BLUE);
+                        }
+                    }
+
+                    //  print the line
+                    fprintf(terminal,"   %s %10s  %3s %2s  %10s   %6s  %5s mi  %3s deg  (%s mi)\n",
+                           entries[iii]->timestamp, entries[iii]->freq, entries[iii]->snr, entries[iii]->drift,
+                           entries[iii]->reporter, entries[iii]->reporterLocation, entries[iii]->distance,
+                           entries[iii]->azimuth, entries[iii]->distance2);
+
+                    //  reset the color
+                    fprintf(terminal,END);
+                }
             }
         }
     }
@@ -519,14 +535,14 @@ int main() {
         beaconData[iii].timestamp[0] = 0;
         beaconData[iii].txFreqHz = 0;
     }
-    strcpy(beaconData[0].timestamp,"13:26");
-    beaconData[0].txFreqHz = 20194630;
-    strcpy(beaconData[1].timestamp,"13:30");
-    beaconData[1].txFreqHz = 24924630;
-    strcpy(beaconData[2].timestamp,"13:34");
-    beaconData[2].txFreqHz = 28124640;
+    strcpy(beaconData[0].timestamp,"19:10:00");
+    beaconData[0].txFreqHz = 24924650;
+    strcpy(beaconData[1].timestamp,"19:14:00");
+    beaconData[1].txFreqHz = 28124640;
+    strcpy(beaconData[2].timestamp,"19:18:00");
+    beaconData[2].txFreqHz = 50293160;
 
-    return doCurl( beaconData, "" );
+    return doCurl( beaconData, "3" );
 }
 
 

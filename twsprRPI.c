@@ -365,7 +365,7 @@ static int txWspr( int rxFreq, int txFreq, char* timestamp ) {
     //  The FT847 tends down in freq as the temperature goes up and vice versa.  Compensate.
     if (txFreq > 144000000) {
         double dtemperature = getTempData();
-        if ( (dtemperature > 50.0) && (dtemperature < 75.0) ) {     // 2m beacon won't be used if temperature > 70 deg.  It used to be 75 but dropped it.
+        if ( dtemperature < 75.0 ) {                // 2m beacon won't be used if temperature > 70 deg.  It used to be 75 but dropped it.
             //  2m pattern seems to be about 10 Hz drop for 1 deg change.  But it increases above 70 deg.
             if (dtemperature > 74.0) { txFreq = 144489250; }
             else if (dtemperature > 72.5) { txFreq = 144489240; }
@@ -374,13 +374,13 @@ static int txWspr( int rxFreq, int txFreq, char* timestamp ) {
             else if (dtemperature > 68.5) { txFreq = 144489190; }
             else if (dtemperature > 67.5) { txFreq = 144489170; }
             else if (dtemperature > 66.5) { txFreq = 144489160; }
-            else if (dtemperature > 63.5) { txFreq = 144489140; }
-            else if (dtemperature > 61.0) { txFreq = 144489130; }
+            else if (dtemperature > 64.0) { txFreq = 144489140; }
+            else if (dtemperature > 62.0) { txFreq = 144489130; }
             else { txFreq = 144489110; }                             // No data belo 62 deg, so this is a guess.
         }
     } else if (txFreq > 50000000) {                 // set gain based on freq: 0.8 for 2m, 0.6 for 6m and 1.0 for 10m/15m, an FT847 quirk.
         double dtemperature = getTempData();
-        if ( (dtemperature > 50.0) && (dtemperature < 90.0) ) {
+        if ( dtemperature < 90.0 ) {
             if (dtemperature > 84.0) { txFreq = 50293160; }         // 86 deg 50293.160 puts the beacon in the middle of the 200 Hz WSPR passband
             else if (dtemperature > 81.0) { txFreq = 50293130; }    // 82 deg 50293.130
             else if (dtemperature > 77.0) { txFreq = 50293100; }    // 79 deg 50293.100
@@ -391,7 +391,7 @@ static int txWspr( int rxFreq, int txFreq, char* timestamp ) {
         }
     } else if (txFreq > 28000000) {
         double dtemperature = getTempData();
-        if ( (dtemperature > 50.0) && (dtemperature < 90.0) ) {
+        if ( dtemperature < 90.0 ) {
             //  The pattern on 10m seems to be for every 2 deg drop decrease the carrier frequency by 10 Hz (as FT847 drifts up).
             if (dtemperature > 85.0) { txFreq = 28124700; }
             else if (dtemperature > 83.0) { txFreq = 28124690; }
