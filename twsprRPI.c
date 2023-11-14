@@ -51,12 +51,6 @@
 #define WSPR_DEFAULT_10M    (28124620)
 #define WSPR_DEFAULT_6M     (50293080)
 #define WSPR_DEFAULT_2M     (144489110)
-#define WSPR_17M            (18104600)
-#define WSPR_15M            (21094600)              //  the actual frequencies.  The fudge factor is in readConfigFileWSPRFreq().
-#define WSPR_12M            (24924600)
-#define WSPR_10M            (28124600)
-#define WSPR_6M             (50293000)
-#define WSPR_2M             (144489000)
 #define CONFIG_FILENAME     "WSPRConfig"
 #define TEMPERATURE_BEACON_MAX          ((double)85.0)                  // stop sending beacons above this temperature
 #define TEMPERATURE_POWER_OFF           (TEMPERATURE_BEACON_MAX+5.0)    // power down radio above this temperature
@@ -80,14 +74,14 @@ int SockAddrStructureSize3;             // for UDP message to send Email
 static char lineToRemove[256] = "";     // for blackoutCheck() and blackoutUpdateFile()
 
 int sendUDPEmailMsg( char *message );
+int readConfigFileWSPRFreq( int convResult );
 
 
 static int readConfigFile( int *rxFreqHz, struct BeaconData *beaconData );
-static int readConfigFileWSPRFreq( int convResult );
 static int readConfigFileWSPRFreqHelp( int convResult, int WSPRFreq );
 static int readConfigFileHelp( char *string );
 static void SignalHandler( int signal );
-static int txWspr( int rxFreq, int txFreq, char* timestamp );
+static int txWspr( int rxFreq, struct BeaconData *beaconData); //, int txFreq, char* timestamp );
 static char *getWavFilename( int txFreq );
 static int waitForTopOfEvenMinute( int txFreq );
 static int updateFiles( char *eventName );
@@ -142,9 +136,13 @@ int main( int argc, char **argv ) {
     if (ft847_open() == -1) { return -1; }
     if (updateFiles("Startup ")) { return 1; }
 
-    for (int iii = 0; iii < MAX_NUMBER_OF_BEACONS; iii++) {    // initialize beacon data.  Really not necessary.  timestamp[] is nulled every pass, txFreqHz set to 0 in readConfigFile()
+    for (int iii = 0; iii < MAX_NUMBER_OF_BEACONS; iii++) {    // initialize beacon data.  Really not necessary.  It's initialized in readConfigFile()
         beaconData[iii].timestamp[0] = 0;
         beaconData[iii].txFreqHz = 0;
+        beaconData[iii].timestamp[0] = 0;
+        beaconData[iii].tone[0] = 0;
+        beaconData[iii].txFreqHzActual = 0;
+        beaconData[iii].temperature = 0.0;
     }
 
     printf("\n\n");
@@ -245,7 +243,7 @@ int main( int argc, char **argv ) {
             }
             printf("Rx %d\nTx ",rx0FreqHz );
             for (int iii = 0; iii < MAX_NUMBER_OF_BEACONS; iii++) {         // zero out timestamp strings
-                beaconData[iii].timestamp[0] = 0;
+                //beaconData[iii].timestamp[0] = 0;                     // this is done in readConfigFile() as each beacon is read.
                 if (beaconData[iii].txFreqHz != 0) {
                     printf("%d  ",beaconData[iii].txFreqHz);
                 }
@@ -317,7 +315,7 @@ int main( int argc, char **argv ) {
                 }
 
                 //  Send beacon.  Fill in timestamp
-                if (txWspr(rx0FreqHz, beaconData[beaconCounter].txFreqHz, beaconData[beaconCounter].timestamp)) {
+                if (txWspr(rx0FreqHz, &beaconData[beaconCounter])) { //beaconData[beaconCounter].txFreqHz, beaconData[beaconCounter].timestamp)) {
                     retval = -1;
                     break;
                 }
@@ -355,28 +353,29 @@ int main( int argc, char **argv ) {
 
 
 //  This function is called as sleep ends.  It waits for the top of second and then initiates a send.
-static int txWspr( int rxFreq, int txFreq, char* timestamp ) {
+static int txWspr( int rxFreq, struct BeaconData *beaconData ) { // txFreq, char* timestamp ) {
     int iii;
     float gain = 1.0;
     char string[16];
     struct tm *info;
     time_t rawtime;         // time_t is long integer
+    int txFreq = beaconData->txFreqHz;
+    double dtemperature = getTempData();
 
     //  The FT847 tends down in freq as the temperature goes up and vice versa.  Compensate.
     if (txFreq > 144000000) {
-        double dtemperature = getTempData();
         if ( dtemperature < 75.0 ) {                // 2m beacon won't be used if temperature > 70 deg.  It used to be 75 but dropped it.
             //  2m pattern seems to be about 10 Hz drop for 1 deg change.  But it increases above 70 deg.
             if (dtemperature > 74.0) { txFreq = 144489250; }
-            else if (dtemperature > 72.5) { txFreq = 144489240; }
-            else if (dtemperature > 71.0) { txFreq = 144489230; }
-            else if (dtemperature > 70.0) { txFreq = 144489220; }
-            else if (dtemperature > 68.5) { txFreq = 144489190; }
-            else if (dtemperature > 67.5) { txFreq = 144489170; }
-            else if (dtemperature > 66.5) { txFreq = 144489160; }
-            else if (dtemperature > 64.0) { txFreq = 144489140; }
-            else if (dtemperature > 62.0) { txFreq = 144489130; }
-            else { txFreq = 144489110; }                             // No data belo 62 deg, so this is a guess.
+            else if (dtemperature > 72.5) { txFreq = 144489220; }
+            else if (dtemperature > 71.0) { txFreq = 144489210; }
+            else if (dtemperature > 70.0) { txFreq = 144489200; }
+            else if (dtemperature > 68.5) { txFreq = 144489170; }
+            else if (dtemperature > 67.5) { txFreq = 144489150; }
+            else if (dtemperature > 66.5) { txFreq = 144489140; }
+            else if (dtemperature > 64.0) { txFreq = 144489120; }
+            else if (dtemperature > 62.0) { txFreq = 144489110; }
+            else { txFreq = 144489090; }                             // No data belo 62 deg, so this is a guess.
         }
     } else if (txFreq > 50000000) {                 // set gain based on freq: 0.8 for 2m, 0.6 for 6m and 1.0 for 10m/15m, an FT847 quirk.
         double dtemperature = getTempData();
@@ -404,6 +403,9 @@ static int txWspr( int rxFreq, int txFreq, char* timestamp ) {
             else { txFreq = 28124600; }                             // as of this writing 67 deg is the last data point, so this is a guess.
         }
     }
+    beaconData->txFreqHzActual = txFreq;
+    beaconData->temperature = dtemperature;
+    strcpy( beaconData->tone, getWavFilename(txFreq) );
 
     if (waitForTopOfEvenMinute( txFreq )) {
         return 1;
@@ -415,9 +417,9 @@ static int txWspr( int rxFreq, int txFreq, char* timestamp ) {
 
     time( &rawtime );
     info = gmtime( &rawtime );      // UTC
-    sprintf(timestamp,"%02d:%02d",info->tm_hour, info->tm_min);
-    printf("Beacon freq %d Hz at %s:%02d UTC          \n", txFreq, timestamp, info->tm_sec);
-    iii = sendWSPRData( getWavFilename(txFreq), gain );
+    sprintf(beaconData->timestamp,"%02d:%02d",info->tm_hour, info->tm_min);
+    printf("Beacon freq %d Hz at %s:%02d UTC          \n", txFreq, beaconData->timestamp, info->tm_sec);
+    iii = sendWSPRData( beaconData->tone, gain );
     if (iii) {
         printf("Error on sendWSPRData()\n");
     }
@@ -626,6 +628,10 @@ static int readConfigFile( int *rxFreqHz, struct BeaconData *beaconData ) {
     *rxFreqHz = 0;
     for (int iii = 0; iii < MAX_NUMBER_OF_BEACONS; iii++ ) {        // no going back.  Must get something assigned.
         beaconData[iii].txFreqHz = 0;
+        beaconData[iii].timestamp[0] = 0;
+        beaconData[iii].tone[0] = 0;
+        beaconData[iii].txFreqHzActual = 0;
+        beaconData[iii].temperature = 0.0;
     }
 
     while (!feof(fptr)) {
@@ -675,7 +681,7 @@ static int readConfigFile( int *rxFreqHz, struct BeaconData *beaconData ) {
 
 //  Verify that the frequency is a WSPR frequency.  Returns 0 if so and -1 if not.  Note that I'm not checking for one freq on each band.  So
 //      there is noting to stop me from sending a WSPR message on the same frequency several times in a row.
-static int readConfigFileWSPRFreq( int convResult ) {
+int readConfigFileWSPRFreq( int convResult ) {
     if ( readConfigFileWSPRFreqHelp( convResult, WSPR_17M ) == 0 ) { return 0; }
     if ( readConfigFileWSPRFreqHelp( convResult, WSPR_15M ) == 0 ) { return 0; }
     if ( readConfigFileWSPRFreqHelp( convResult, WSPR_12M ) == 0 ) { return 0; }

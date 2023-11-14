@@ -56,12 +56,17 @@ typedef struct Entry Entry;
 char *goldenCalls[] = { "KK6PR",     "KP4MD",  "W7PAU",  "KA7OEI-1", "AC0G",
                         "KPH",       "KV0S",   "N2HQI",  "W2ACR",    "KA7OEI/Q",
                         "AI6VN/KH6", "K6RFT",  "KV4TT",  "W3ENR",    "K1RA-PI",
-                        "W7WKR-K2",  "KV6X",   "WA2TP" };
-#define NUM_OF_GOLDEN_CALLS 18   // do this because "size_t n = sizeof(a) / sizeof(int);" won't work since each element is a different size.
+                        "W7WKR-K2",  "KV6X",   "WA2TP",  "N3IZN/SDR" };
+#define NUM_OF_GOLDEN_CALLS 19   // do this because "size_t n = sizeof(a) / sizeof(int);" won't work since each element is a different size.
 
 int doCurl( struct BeaconData *beaconData, char* termPTSNum );
 
 static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, char *thedate, int minBeacon );
+static int getIndexBasedOnFreq( int ifreq );
+static void resetGoldenList( void );
+static int goldenListNotEmpty( void );
+static void insertInGoldenList( char *freq );
+static void processGoldenList( int txFreqHz, char* tone, int txFreqHzActual, double temperature, FILE *fptr  );
 static int parseHTMLLine( char *string, struct BeaconData *beaconData, int numBeacons, Entry **entry, int *numEntries, char *thedate, int *numberOfDuplicates );
 static char* parseHTMLTag( char *string, char *field );
 static void doOneGrid( char *his, int *nAz, int *nDmiles );
@@ -78,7 +83,7 @@ int doCurl( struct BeaconData *beaconData, char* termPTSNum ) {
     int iii;
     int minBeacon;      // the lowest beacon frequency
 
-    //  Out of the structure beaconData really only need the timestamp.  Remove the seconds from the timestamp string.  It should already be removed, just in case.
+    //  Remove the seconds from the timestamp string.  It should already be removed, just in case.
     minBeacon = INT_MAX;
     for (iii = 0; iii < MAX_NUMBER_OF_BEACONS; iii++) {
         if (beaconData[iii].txFreqHz == 0) {
@@ -125,10 +130,23 @@ int doCurl( struct BeaconData *beaconData, char* termPTSNum ) {
             free( entries[iii] );
         }
     }
+    fclose(fptr);
+
     printf("Num entries %d\n",numEntries);
     printf("Num duplicates %d\n",numberOfDuplicates);
 
-    fclose(fptr);
+    if (goldenListNotEmpty()) {
+        fptr = fopen("log_golden.txt","at");
+        if (fptr == (FILE *)NULL) {
+            return -1;
+        }
+        printf("  Temperature - Expected Freq - Actual Freq - Better Freq - Error\n");
+        for (iii = 0; iii < numBeacons; iii++) {
+            processGoldenList( beaconData[iii].txFreqHz, beaconData[iii].tone, beaconData[iii].txFreqHzActual, beaconData[iii].temperature, fptr );
+        }
+        fclose(fptr);
+    }
+
     return returnValue;
 }
 
@@ -186,6 +204,18 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
             int tempInt;
             double entryFreq;
             FILE *terminal;         // either stdout or /dev/pts/?
+
+            {
+                char *ccc;              // I started getting bizzare frequencies from WSPRNet.org.  Find these and eliminate them.
+                char string[64];
+
+                strcpy(string, entries[iii]->freq);
+                ccc = strchr(string,'.');                   // search for decimal point in string and remove it
+                if (ccc == (char *)NULL) { continue; }
+                strcpy( ccc, &ccc[1] );
+                sscanf(string,"%d",&tempInt);               // convert string to int, representing frequency in Hz
+                if (readConfigFileWSPRFreq(tempInt-1500)) { continue; }    // readConfigFileWSPRFreq() returns -1 if not a supported WSPR freq.  Have to add 1500 Hz for tone offset.
+            }
 
             //  Get the frequency as a double for use below, checking for 21 MHz and 28 MHz.
             sscanf(  entries[iii]->freq, "%lf", &entryFreq );
@@ -263,38 +293,38 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
         }
     }
 
-    fprintf(fptr," ------- %s above \n",thedate);
-    fclose(fptr);
-
     if (remoteTerminal) {
         fprintf(remoteTerminal," ------- \n");
         fclose(remoteTerminal);
     }
 
     //  Print out the "golden callsigns".  The ones that, from observation, seem to be GPS controlled because they are almost always reporting the same frequency.
+    resetGoldenList();
     for (int iii = 0; iii < *numEntries; iii++) {
         if (entries[iii] != (Entry *)NULL) {
             double entryFreq;
             sscanf(  entries[iii]->freq, "%lf", &entryFreq );
             if (entryFreq > 24.0) {        // only print out golden freqs on 12m and above
-                int tempInt;
-                FILE *terminal= stdout;
-                int printThisLine = 0;
+                //int tempInt;
+                //FILE *terminal;
+                int thisIsGoldenCall = 0;
 
                 for (int jjj = 0; jjj < NUM_OF_GOLDEN_CALLS; jjj++) {
                     int sss = strcmp(entries[iii]->reporter, goldenCalls[jjj]);
                     if (sss == 0) {
-                        printThisLine = 1;
+                        thisIsGoldenCall = 1;
                         break;
                     }
                 }
 
-                if (printThisLine) {
-                    if (firstGolden == 0) {
-                        firstGolden = 1;
-                        fprintf(terminal,"\n");
-                    }
+                if (thisIsGoldenCall) {
+                    insertInGoldenList( entries[iii]->freq );
 
+                    if (firstGolden == 0) {         // print separator line if this is the first.
+                        firstGolden = 1;
+                        fprintf(fptr,"\n");
+                    }
+                    /*
                     //  This block of code just determines what color to print the line with.
                     sscanf( entries[iii]->distance, "%d", &tempInt );
                     if (tempInt > 3000) {                                   // if distance > 3000 then print green
@@ -305,19 +335,22 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
                             fprintf(terminal,BLUE);
                         }
                     }
-
+                    */
                     //  print the line
-                    fprintf(terminal,"   %s %10s  %3s %2s  %10s   %6s  %5s mi  %3s deg  (%s mi)\n",
+                    fprintf(fptr,"  g %s %10s  %3s %2s  %10s   %6s  %5s mi  %3s deg  (%s mi)\n",
                            entries[iii]->timestamp, entries[iii]->freq, entries[iii]->snr, entries[iii]->drift,
                            entries[iii]->reporter, entries[iii]->reporterLocation, entries[iii]->distance,
                            entries[iii]->azimuth, entries[iii]->distance2);
 
                     //  reset the color
-                    fprintf(terminal,END);
+                    //fprintf(terminal,END);
                 }
             }
         }
     }
+
+    fprintf(fptr," ------- %s above \n",thedate);
+    fclose(fptr);
 
     return 0;
 }
@@ -523,6 +556,173 @@ static void doOneGrid( char *his, int *nAz, int *nDmiles ) {
                         &nDkm       //  Distance in km
                         );
 }
+
+/*
+    The functions below are an attempt to use the golden calls to determine the proper frequency to set the FT847.  It collects the frequencies
+    of all the golden calls in goldenList[].  The first index is for the band (12m, 10m, 6, and 2m).  The second is for each golden call
+    heard.  The third index is the frequency (index 0) and sum (index 1).  The sum is only used in processGoldenList() and can be removed
+    from goldenList[] and made a local array.
+
+    I wanted the first index to represent each beacon, so that if there were multiple beacons on the same band they would be processed
+    separately.  I didn't do that because processEntries() (where insertInGoldenList() is called from) doesn't have any beacon information.
+    This is simpler although it will break down if multiple HF beacons are on the same band.  This is because the tone will change with
+*/
+
+#define FREQ_INDEX  0
+#define SUM_INDEX   1
+
+#define NUMBER_OF_GOLDEN_INDICES    4
+
+#define INDEX_24MHZ     0
+#define INDEX_28MHZ     1
+#define INDEX_50MHZ     2
+#define INDEX_144MHZ    3
+
+static int goldenList[ NUMBER_OF_GOLDEN_INDICES ][NUM_OF_GOLDEN_CALLS][2];
+static int numberItemsGoldenList[ NUMBER_OF_GOLDEN_INDICES ];
+
+static int getIndexBasedOnFreq( int ifreq ) {
+    if (ifreq > 144000000) {
+        return INDEX_144MHZ;
+    } else if (ifreq > 50000000) {
+        return INDEX_50MHZ;
+    } else if (ifreq > 28000000) {
+        return INDEX_28MHZ;
+    } else if (ifreq > 24000000) {
+        return INDEX_24MHZ;
+    } else {
+        return -1;
+    }
+}
+
+// call this from processEntries() above, prior to the block of code that prints the golden calls.
+static void resetGoldenList( void ) {
+    for (int jjj = 0; jjj < NUMBER_OF_GOLDEN_INDICES; jjj++) {
+        for (int iii = 0; iii < NUM_OF_GOLDEN_CALLS; iii++ ) {
+            goldenList[jjj][ iii ][FREQ_INDEX] = 0;
+            goldenList[jjj][ iii ][SUM_INDEX] = 0;
+        }
+        numberItemsGoldenList[jjj] = 0;
+    }
+}
+
+//  returns 1 if there is anything in the golden list, 0 otherwise.
+static int goldenListNotEmpty( void ) {
+    for (int jjj = 0; jjj < NUMBER_OF_GOLDEN_INDICES; jjj++) {
+        for (int iii = 0; iii < NUM_OF_GOLDEN_CALLS; iii++ ) {
+            if (goldenList[jjj][ iii ][FREQ_INDEX] != 0) {
+                //printf("Found non-zero at iii=%d and jjj=%d, value %d\n",iii,jjj,goldenList[jjj][ iii ][FREQ_INDEX]);
+                return 1;
+            }
+        }
+    }
+    //printf("Found golden list empty\n");
+    return 0;
+}
+
+// call this from processEntries() above, in the loop where golden freqs are printed
+static void insertInGoldenList( char *freq ) {
+    int ifreq,index;
+    char *ccc;
+
+    ccc = strchr(freq,'.');
+    if (ccc == (char *)NULL) { return; }
+    strcpy( ccc, &ccc[1] );
+    sscanf(freq,"%d",&ifreq);
+
+    index = getIndexBasedOnFreq( ifreq );
+    if (index == -1) { return; }
+
+    goldenList[index][ numberItemsGoldenList[index] ][FREQ_INDEX] = ifreq;
+    goldenList[index][ numberItemsGoldenList[index] ][SUM_INDEX] = 0;
+    //printf(" freq %d  sum %d  num %d\n",
+    //       goldenList[index][ numberItemsGoldenList[index] ][FREQ_INDEX],
+    //       goldenList[index][ numberItemsGoldenList[index] ][SUM_INDEX],
+    //       numberItemsGoldenList[index] );
+    numberItemsGoldenList[index]++;
+}
+
+
+//  called from doCurl(), once for each band.
+static void processGoldenList( int txFreqHz, char* tone, int txFreqHzActual, double temperature, FILE *fptr  ) {
+    int index, wsprFreq, minNumGolden;
+
+    index = getIndexBasedOnFreq( txFreqHz );
+    if (index == -1) { return; }
+    switch (index) {
+        case 0:
+            wsprFreq = WSPR_12M;
+            minNumGolden = 5;
+            break;
+        case 1:
+            wsprFreq = WSPR_10M;
+            minNumGolden = 5;
+            break;
+        case 2:
+            wsprFreq = WSPR_6M;
+            minNumGolden = 1;
+            break;
+        case 3:
+            wsprFreq = WSPR_2M;
+            minNumGolden = 1;
+            break;
+    }
+
+    if (numberItemsGoldenList[index] >= minNumGolden) {        // 5 stations for HF, 1 for 6m and 2m
+        int trueFreq, trueSum;
+        int expectedFreq, error, error10;
+
+        //  Loop through each station and find the differences in frequency between it and all the other stations.  Insert the sum of all differences in [SUM_INDEX]
+        for (int iii = 0; iii < numberItemsGoldenList[index]; iii++) {
+            int thisFreq = goldenList[index][iii][FREQ_INDEX];
+            for (int jjj = 0; jjj < numberItemsGoldenList[index]; jjj++) {
+                goldenList[index][iii][SUM_INDEX] += (thisFreq - goldenList[index][jjj][FREQ_INDEX]);    // this will add itself but since it's zero there's no difference and it's easier than making an exception for iii==jjj
+            }
+        }
+
+        //  Now find the frequency that has the minimum sum.  This should be the true frequency.
+        trueFreq = goldenList[index][0][FREQ_INDEX];
+        trueSum = abs(goldenList[index][0][SUM_INDEX]);
+        for (int iii = 1; iii < numberItemsGoldenList[index]; iii++) {
+            if ( abs(goldenList[index][iii][SUM_INDEX]) < trueSum) {
+                trueFreq = goldenList[index][iii][FREQ_INDEX];
+                trueSum = goldenList[index][iii][SUM_INDEX];
+            }
+        }
+
+        //printf(" trueFreq %d  trueSum %d  txFreqHz %d  tone %s  txFreqHzActual %d  temperature %lf\n",trueFreq, trueSum, txFreqHz, tone, txFreqHzActual, temperature );
+
+        //  Now have true frequency.  Display the difference between true frequency and what it should have been, based on wsprFreq+tone.
+        //      Display the error.  Display what the actual transmitted frequency should have been for zero error.
+        //      Display number of golden calls hear on this band.  Write data to a log file.
+        tone[4] = 0;                            // change "1500.wav" to "1500"
+        sscanf( tone, "%d", &expectedFreq );    // convert tone to integer
+        expectedFreq += wsprFreq;               // expected freq is where the signal should have been, wspr base freq plus tone frequency shows
+
+        //  The radio can only be set to intervals on 10Hz.  Set error to be intervals of 10 Hz.
+        error = expectedFreq-trueFreq;
+        error10 = (error / 10)*10;
+        if (abs(error % 10) < 5) {
+            error = error10;
+        } else {
+            if (error < 0) {
+                error = error10-10;
+            } else {
+                error = error10+10;
+            }
+        }
+
+        //printf(" temperature %3.3lf  expectedFreq %d  actualFreq %d error %d (%d) suggested %d (%d calls)\n",temperature,expectedFreq,trueFreq,
+        //        error, expectedFreq-trueFreq, txFreqHzActual+(error), numberItemsGoldenList[index] );
+        //printf("  Temperature - Expected Freq - Actual Freq - Better Freq - Error\n");
+        printf("  %3.3lf deg   %9d Hz    %9d Hz  %9d Hz  %3d (%d) Hz  (%d calls)\n",
+                temperature, expectedFreq, trueFreq, txFreqHzActual+(error), error, expectedFreq-trueFreq, numberItemsGoldenList[index] );
+        fprintf(fptr,"  %3.3lf deg   %9d Hz    %9d Hz  %9d Hz  %3d (%d) Hz  (%d calls)\n",
+                temperature, expectedFreq, trueFreq, txFreqHzActual+(error), error, expectedFreq-trueFreq, numberItemsGoldenList[index] );
+    }
+}
+
+
 
 // uncomment curl() call and, if using a different curl results, change fopen (two lines below curl) back to x.txt
 //#define MAIN_HERE 1
