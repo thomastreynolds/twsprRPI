@@ -54,22 +54,22 @@ struct Entry {
 typedef struct Entry Entry;
 
 char *goldenCalls[] = { "KK6PR",     "KP4MD",  "W7PAU",  "KA7OEI-1", "AC0G",
-                        "KPH",       "KV0S",   "N2HQI",  "W2ACR",    "KA7OEI/Q",
+                        "KPH",       "KV0S",   "WA2TP",  "W2ACR",    "KA7OEI/Q",
                         "AI6VN/KH6", "K6RFT",  "KV4TT",  "W3ENR",    "K1RA-PI",
-                        "W7WKR-K2",  "KV6X",   "WA2TP",  "N3IZN/SDR" };
-#define NUM_OF_GOLDEN_CALLS 19   // do this because "size_t n = sizeof(a) / sizeof(int);" won't work since each element is a different size.
+                        "W7WKR-K2",  "KV6X",   "N3IZN/SDR" };
+#define NUM_OF_GOLDEN_CALLS 18   // do this because "size_t n = sizeof(a) / sizeof(int);" won't work since each element is a different size.
 
 int doCurl( struct BeaconData *beaconData, char* termPTSNum );
 
 static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, char *thedate, int minBeacon );
+static int parseHTMLLine( char *string, struct BeaconData *beaconData, int numBeacons, Entry **entry, int *numEntries, char *thedate, int *numberOfDuplicates );
+static char* parseHTMLTag( char *string, char *field );
+static void doOneGrid( char *his, int *nAz, int *nDmiles );
 static int getIndexBasedOnFreq( int ifreq );
 static void resetGoldenList( void );
 static int goldenListNotEmpty( void );
 static void insertInGoldenList( char *freq );
-static void processGoldenList( int txFreqHz, char* tone, int txFreqHzActual, double temperature, FILE *fptr  );
-static int parseHTMLLine( char *string, struct BeaconData *beaconData, int numBeacons, Entry **entry, int *numEntries, char *thedate, int *numberOfDuplicates );
-static char* parseHTMLTag( char *string, char *field );
-static void doOneGrid( char *his, int *nAz, int *nDmiles );
+static void processGoldenList( int txFreqHz, char* tone, int txFreqHzActual, double temperature, FILE *fptr, char* thedate, int *headerNotPrinted  );
 
 int doCurl( struct BeaconData *beaconData, char* termPTSNum ) {
     FILE *fptr;
@@ -136,13 +136,13 @@ int doCurl( struct BeaconData *beaconData, char* termPTSNum ) {
     printf("Num duplicates %d\n",numberOfDuplicates);
 
     if (goldenListNotEmpty()) {
+        int headerNotPrinted = 1;
         fptr = fopen("log_golden.txt","at");
         if (fptr == (FILE *)NULL) {
             return -1;
         }
-        printf("  Temperature - Expected Freq - Actual Freq - Better Freq - Error\n");
         for (iii = 0; iii < numBeacons; iii++) {
-            processGoldenList( beaconData[iii].txFreqHz, beaconData[iii].tone, beaconData[iii].txFreqHzActual, beaconData[iii].temperature, fptr );
+            processGoldenList( beaconData[iii].txFreqHz, beaconData[iii].tone, beaconData[iii].txFreqHzActual, beaconData[iii].temperature, fptr, thedate, &headerNotPrinted );
         }
         fclose(fptr);
     }
@@ -253,10 +253,10 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
             }
 
             //  print the line
-            fprintf(terminal,"   %s %10s  %3s %2s  %10s   %6s  %5s mi  %3s deg  (%s mi)\n",
+            fprintf(terminal,"   %s %10s  %3s %2s  %10s   %6s  %5s mi  %3s deg\n",
                    entries[iii]->timestamp, entries[iii]->freq, entries[iii]->snr, entries[iii]->drift,
                    entries[iii]->reporter, entries[iii]->reporterLocation, entries[iii]->distance,
-                   entries[iii]->azimuth, entries[iii]->distance2);
+                   entries[iii]->azimuth); //, entries[iii]->distance2);
 
             //  reset the color
             fprintf(terminal,END);
@@ -305,8 +305,6 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
             double entryFreq;
             sscanf(  entries[iii]->freq, "%lf", &entryFreq );
             if (entryFreq > 24.0) {        // only print out golden freqs on 12m and above
-                //int tempInt;
-                //FILE *terminal;
                 int thisIsGoldenCall = 0;
 
                 for (int jjj = 0; jjj < NUM_OF_GOLDEN_CALLS; jjj++) {
@@ -324,26 +322,13 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
                         firstGolden = 1;
                         fprintf(fptr,"\n");
                     }
-                    /*
-                    //  This block of code just determines what color to print the line with.
-                    sscanf( entries[iii]->distance, "%d", &tempInt );
-                    if (tempInt > 3000) {                                   // if distance > 3000 then print green
-                        fprintf(terminal,GREEN);
-                    } else {
-                        sscanf( entries[iii]->snr, "%d", &tempInt );
-                        if (tempInt >= 0) {                                 // if snr >= 0 then print blue
-                            fprintf(terminal,BLUE);
-                        }
-                    }
-                    */
-                    //  print the line
-                    fprintf(fptr,"  g %s %10s  %3s %2s  %10s   %6s  %5s mi  %3s deg  (%s mi)\n",
+
+                    //  print the golden call line to log file
+                    fprintf(fptr,"  g %s %10s  %3s %2s  %10s   %6s  %5s mi  %3s deg (%s mi)\n",
                            entries[iii]->timestamp, entries[iii]->freq, entries[iii]->snr, entries[iii]->drift,
                            entries[iii]->reporter, entries[iii]->reporterLocation, entries[iii]->distance,
                            entries[iii]->azimuth, entries[iii]->distance2);
 
-                    //  reset the color
-                    //fprintf(terminal,END);
                 }
             }
         }
@@ -644,7 +629,7 @@ static void insertInGoldenList( char *freq ) {
 
 
 //  called from doCurl(), once for each band.
-static void processGoldenList( int txFreqHz, char* tone, int txFreqHzActual, double temperature, FILE *fptr  ) {
+static void processGoldenList( int txFreqHz, char* tone, int txFreqHzActual, double temperature, FILE *fptr, char* thedate, int *headerNotPrinted  ) {
     int index, wsprFreq, minNumGolden;
 
     index = getIndexBasedOnFreq( txFreqHz );
@@ -715,10 +700,15 @@ static void processGoldenList( int txFreqHz, char* tone, int txFreqHzActual, dou
         //printf(" temperature %3.3lf  expectedFreq %d  actualFreq %d error %d (%d) suggested %d (%d calls)\n",temperature,expectedFreq,trueFreq,
         //        error, expectedFreq-trueFreq, txFreqHzActual+(error), numberItemsGoldenList[index] );
         //printf("  Temperature - Expected Freq - Actual Freq - Better Freq - Error\n");
-        printf("  %3.3lf deg   %9d Hz    %9d Hz  %9d Hz  %3d (%d) Hz  (%d calls)\n",
+        if (*headerNotPrinted) {
+            printf(" Temperature  Expected Hz  Actual Hz  Better Hz  Error Hz\n");
+            //       ddd.ddd dg   iiiiiiiii    iiiiiiiii  iiiiiiiii  iii (%d)  %d (stn)
+            *headerNotPrinted = 0;
+        }
+        printf("  %3.3lf dg   %9d    %9d  %9d  %3d (%d)  %d (stn)\n",
                 temperature, expectedFreq, trueFreq, txFreqHzActual+(error), error, expectedFreq-trueFreq, numberItemsGoldenList[index] );
-        fprintf(fptr,"  %3.3lf deg   %9d Hz    %9d Hz  %9d Hz  %3d (%d) Hz  (%d calls)\n",
-                temperature, expectedFreq, trueFreq, txFreqHzActual+(error), error, expectedFreq-trueFreq, numberItemsGoldenList[index] );
+        fprintf(fptr,"  %3.3lf deg   %9d Hz    %9d Hz  %9d Hz  %3d (%d) Hz  (%d calls) %s\n",
+                temperature, expectedFreq, trueFreq, txFreqHzActual+(error), error, expectedFreq-trueFreq, numberItemsGoldenList[index], thedate );
     }
 }
 

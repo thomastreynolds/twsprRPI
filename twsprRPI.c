@@ -126,7 +126,7 @@ int main( int argc, char **argv ) {
             //  Anything else then check to see if all numbers
             if ( strspn(argv[i], "0123456789") == strlen(argv[i]) ) {
                 strcpy(termPTSNum,argv[i]);
-                printf("\nUsing /dev/pts/%s for 15m output\n\n",termPTSNum);
+                printf("\nUsing /dev/pts/%s for lowest freq output\n\n",termPTSNum);
             }
         }
     }
@@ -137,7 +137,6 @@ int main( int argc, char **argv ) {
     if (updateFiles("Startup ")) { return 1; }
 
     for (int iii = 0; iii < MAX_NUMBER_OF_BEACONS; iii++) {    // initialize beacon data.  Really not necessary.  It's initialized in readConfigFile()
-        beaconData[iii].timestamp[0] = 0;
         beaconData[iii].txFreqHz = 0;
         beaconData[iii].timestamp[0] = 0;
         beaconData[iii].tone[0] = 0;
