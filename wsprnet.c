@@ -701,11 +701,11 @@ static void processGoldenList( int txFreqHz, char* tone, int txFreqHzActual, dou
         //        error, expectedFreq-trueFreq, txFreqHzActual+(error), numberItemsGoldenList[index] );
         //printf("  Temperature - Expected Freq - Actual Freq - Better Freq - Error\n");
         if (*headerNotPrinted) {
-            printf(" Temperature  Expected Hz  Actual Hz  Better Hz  Error Hz\n");
+            printf(" Temperature  Expected Hz  Actual Hz  Better Hz   Error Hz\n");
             //       ddd.ddd dg   iiiiiiiii    iiiiiiiii  iiiiiiiii  iii (%d)  %d (stn)
             *headerNotPrinted = 0;
         }
-        printf("  %3.3lf dg   %9d    %9d  %9d  %3d (%d)  %d (stn)\n",
+        printf("  %3.3lf F    %9d    %9d  %9d   %3d (%d)  (%d stn)\n",
                 temperature, expectedFreq, trueFreq, txFreqHzActual+(error), error, expectedFreq-trueFreq, numberItemsGoldenList[index] );
         fprintf(fptr,"  %3.3lf deg   %9d Hz    %9d Hz  %9d Hz  %3d (%d) Hz  (%d calls) %s\n",
                 temperature, expectedFreq, trueFreq, txFreqHzActual+(error), error, expectedFreq-trueFreq, numberItemsGoldenList[index], thedate );
