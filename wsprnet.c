@@ -157,6 +157,7 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
     int firstGolden = 0;
     double remoteTerminalFreq;
 
+    resetGoldenList();              // clear out golden list here, before checking if entries are blank (wsprnet.org is down).  Otherwise golden list from previous burst will be repeated
     if (*numEntries == 0) {
         printf("\n");
         return 0;
@@ -299,7 +300,6 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
     }
 
     //  Print out the "golden callsigns".  The ones that, from observation, seem to be GPS controlled because they are almost always reporting the same frequency.
-    resetGoldenList();
     for (int iii = 0; iii < *numEntries; iii++) {
         if (entries[iii] != (Entry *)NULL) {
             double entryFreq;
