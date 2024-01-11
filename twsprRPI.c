@@ -364,7 +364,6 @@ static int txWspr( int rxFreq, struct BeaconData *beaconData ) { // txFreq, char
     //  The FT847 tends down in freq as the temperature goes up and vice versa.  Compensate.
     if (txFreq > 144000000) {
         if ( dtemperature < 75.0 ) {                // 2m beacon won't be used if temperature > 70 deg.  It used to be 75 but dropped it.
-            //  2m pattern seems to be about 10 Hz drop for 1 deg change.  But it increases above 70 deg.
             if (dtemperature > 74.0) { txFreq = 144489250; }
             else if (dtemperature > 72.5) { txFreq = 144489220; }
             else if (dtemperature > 71.0) { txFreq = 144489210; }
@@ -372,9 +371,20 @@ static int txWspr( int rxFreq, struct BeaconData *beaconData ) { // txFreq, char
             else if (dtemperature > 68.5) { txFreq = 144489170; }
             else if (dtemperature > 67.5) { txFreq = 144489150; }
             else if (dtemperature > 66.5) { txFreq = 144489140; }
-            else if (dtemperature > 64.0) { txFreq = 144489120; }
-            else if (dtemperature > 62.0) { txFreq = 144489110; }
-            else { txFreq = 144489090; }                             // No data belo 62 deg, so this is a guess.
+            else if (dtemperature > 64.8) { txFreq = 144489130; }
+            else if (dtemperature > 61.0) { txFreq = 144489120; }
+            else if (dtemperature > 59.4) { txFreq = 144489110; }
+            else if (dtemperature > 57.5) { txFreq = 144489100; }
+            else if (dtemperature > 56.3) { txFreq = 144489090; }
+            else if (dtemperature > 55.3) { txFreq = 144489080; }
+            else if (dtemperature > 54.1) { txFreq = 144489070; }
+            else if (dtemperature > 53.1) { txFreq = 144489060; }
+            else if (dtemperature > 52.1) { txFreq = 144489050; }
+            else if (dtemperature > 50.6) { txFreq = 144489040; }
+            else if (dtemperature > 50.0) { txFreq = 144489030; }
+            else if (dtemperature > 46.6) { txFreq = 144489020; }
+            else if (dtemperature > 45.3) { txFreq = 144489030; }    // below 45.3 it seems to go up again.
+            else { txFreq = 144489040; }                             // No data belo 44.3 deg
         }
     } else if (txFreq > 50000000) {                 // set gain based on freq: 0.8 for 2m, 0.6 for 6m and 1.0 for 10m/15m, an FT847 quirk.
         double dtemperature = getTempData();
