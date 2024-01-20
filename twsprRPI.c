@@ -391,25 +391,44 @@ static int txWspr( int rxFreq, struct BeaconData *beaconData ) { // txFreq, char
         if ( dtemperature < 90.0 ) {
             if (dtemperature > 84.0) { txFreq = 50293160; }         // 86 deg 50293.160 puts the beacon in the middle of the 200 Hz WSPR passband
             else if (dtemperature > 81.0) { txFreq = 50293130; }    // 82 deg 50293.130
-            else if (dtemperature > 77.0) { txFreq = 50293100; }    // 79 deg 50293.100
-            else if (dtemperature > 73.0) { txFreq = 50293080; }    // 75 deg 50293.080
-            else if (dtemperature > 69.0) { txFreq = 50293060; }    // 71 deg 50293.060
-            else if (dtemperature > 62.0) { txFreq = 50293040; }    // 65 deg 50293.040
-            else { txFreq = 50293020; }                             // 60 deg 50293.020 but good at 55 deg.
+            else if (dtemperature > 78.0) { txFreq = 50293100; }
+            else if (dtemperature > 77.0) { txFreq = 50293090; }
+            else if (dtemperature > 75.0) { txFreq = 50293080; }
+            else if (dtemperature > 73.5) { txFreq = 50293070; }
+            else if (dtemperature > 70.5) { txFreq = 50293060; }
+            else if (dtemperature > 67.5) { txFreq = 50293050; }
+            else if (dtemperature > 65.0) { txFreq = 50293040; }
+            else if (dtemperature > 56.0) { txFreq = 50293030; }
+            else if (dtemperature > 51.0) { txFreq = 50293020; }
+            else if (dtemperature > 45.2) { txFreq = 50293010; }
+            else { txFreq = 50293020; }                             // data below 45.2 seems to go up again, no data below 44.15
         }
     } else if (txFreq > 28000000) {
         double dtemperature = getTempData();
         if ( dtemperature < 90.0 ) {
-            //  The pattern on 10m seems to be for every 2 deg drop decrease the carrier frequency by 10 Hz (as FT847 drifts up).
             if (dtemperature > 85.0) { txFreq = 28124700; }
-            else if (dtemperature > 83.0) { txFreq = 28124690; }
-            else if (dtemperature > 79.0) { txFreq = 28124680; }
-            else if (dtemperature > 78.0) { txFreq = 28124670; }
-            else if (dtemperature > 75.0) { txFreq = 28124660; }
-            else if (dtemperature > 71.0) { txFreq = 28124640; }
-            else if (dtemperature > 69.0) { txFreq = 28124630; }
-            else if (dtemperature > 65.0) { txFreq = 28124620; }
-            else { txFreq = 28124600; }                             // as of this writing 67 deg is the last data point, so this is a guess.
+            else if (dtemperature > 82.0) { txFreq = 28124690; }
+            else if (dtemperature > 80.0) { txFreq = 28124680; }
+            else if (dtemperature > 79.0) { txFreq = 28124670; }
+            else if (dtemperature > 76.0) { txFreq = 28124660; }
+            else if (dtemperature > 73.0) { txFreq = 28124650; }
+            else if (dtemperature > 68.0) { txFreq = 28124640; }
+            else if (dtemperature > 60.0) { txFreq = 28124630; }
+            else if (dtemperature > 54.5) { txFreq = 28124620; }
+            else { txFreq = 28124610; }                             // as of this writing 45.9 deg is the lowest temperature for which I have data
+        }
+    } else if (txFreq > 24000000) {
+        double dtemperature = getTempData();
+        if ( dtemperature < 90.0 ) {
+            if (dtemperature > 85.0) { txFreq = 24924690; }
+            else if (dtemperature > 82.0) { txFreq = 24924680; }
+            else if (dtemperature > 81.0) { txFreq = 24924670; }
+            else if (dtemperature > 78.9) { txFreq = 24924660; }
+            else if (dtemperature > 77.2) { txFreq = 24924650; }
+            else if (dtemperature > 72.5) { txFreq = 24924640; }
+            else if (dtemperature > 66.0) { txFreq = 24924630; }
+            else if (dtemperature > 57.0) { txFreq = 24924620; }
+            else { txFreq = 24924610; }                             // as of this writing 44.7 deg is the lowest temperature for which I have data
         }
     }
     beaconData->txFreqHzActual = txFreq;
