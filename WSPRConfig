@@ -1,6 +1,8 @@
+#rxFreqHz  50260040
 rxFreqHz  24915000
-# txFreqHz  18104620
-txFreqHz  21094660
+#rxFreqHz  50313000
+#txFreqHz  0
+txFreqHz  21094600
 txFreqHz  24924650
 txFreqHz  28124640
 txFreqHz  50293160

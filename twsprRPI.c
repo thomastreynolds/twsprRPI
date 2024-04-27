@@ -34,6 +34,8 @@
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <sys/stat.h>
 #include <sys/select.h>
 #include <sys/ioctl.h>
 #include <signal.h>
@@ -85,6 +87,7 @@ static int txWspr( int rxFreq, struct BeaconData *beaconData); //, int txFreq, c
 static char *getWavFilename( int txFreq );
 static int waitForTopOfEvenMinute( int txFreq );
 static int updateFiles( char *eventName );
+static int findttyUSB( void );
 static int installSignalHandlers( int useMyHandlers );
 static int initializeNetwork( void );
 static void closeNetwork( void );
@@ -229,6 +232,13 @@ int main( int argc, char **argv ) {
             int heatWaitInLog = 0;
             int heatWaitPowerOff = 0;
 
+            //  Before starting make sure /dev/ttyUSBFT847 still points to ttyUSB0 or ttyUSB1.  If it points to something else then the USB to RS232 port
+            //      is going south.  See 4/25/2024 entry in LinuxNotes2.docx or RaspberryPiNotes.docx
+            if (findttyUSB()) {         // return 0 if ok, 1 if ttyUSBFT847 points to something else, -1 on error.
+                sendUDPEmailMsg( "RPi .104 ttyUSBFT847 problem\nttyUSBFT847 no longer points to ttyUSB0 or ttyUSB1\n  It is either gone or points to another ttyUSBX\n" );
+                retval = -1;
+                break;
+            }
             //
             //  Read the config file and prepare for the beacons
             //
@@ -766,6 +776,98 @@ static int readConfigFileHelp( char *string ) {
         return -1;      //  error on conversion
     }
     return returnValue;
+}
+
+
+//  int findttyUSB( void ) - scans /dev directory looking for ttyUSBFT847.  If found and it points to ttyUSB0 or ttyUSB1 then return 0.
+//      return 1 if it points to anything else and -1 on error.
+static int findttyUSB( void ) {
+    char directory[] = "/dev";
+    DIR *dp;
+    struct dirent *entry;
+    struct stat statbuf;
+    int return_value = 0;
+
+    printf("\n");
+
+    //  start by getting the current directory so when function is over can return to it.
+    char currentDirectory[1024];
+    char *ccc = getcwd(currentDirectory,sizeof(currentDirectory));
+    if (ccc == (char *)NULL) {
+        printf("cannot get current directory");
+        return -1;
+    }
+
+    //  opendir() returns a DIR* pointer, used in readdir() below.
+    if((dp = opendir(directory)) == NULL) {
+        printf("cannot open directory: %s\n", directory);
+        return -1;
+    }
+
+    //  change to the working directory in the string directory
+    chdir(directory);
+
+    /*  readdir() returns a dirent structure for the directory pointed to by DIR *dp
+            struct dirent {
+                ino_t          d_ino;       // inode number
+                off_t          d_off;       // offset to the next dirent
+                unsigned short d_reclen;    // length of this record
+                unsigned char  d_type;      // type of file; not supported by all file system types
+                char           d_name[256]; // filename
+            };
+    */
+    while((entry = readdir(dp)) != NULL) {
+        /*  lstat() is passed a stat structure (second parameter).  lstat() fills in, giving information about the filename (first parameter).
+                Here this is only used to determine if the entry is a directory.
+                    struct stat {
+                        dev_t     st_dev;     // ID of device containing file
+                        ino_t     st_ino;     // inode number
+                        mode_t    st_mode;    // protection
+                        nlink_t   st_nlink;   // number of hard links
+                        uid_t     st_uid;     // user ID of owner
+                        gid_t     st_gid;     // group ID of owner
+                        dev_t     st_rdev;    // device ID (if special file)
+                        off_t     st_size;    // total size, in bytes
+                        blksize_t st_blksize; // blocksize for file system I/O
+                        blkcnt_t  st_blocks;  // number of 512B blocks allocated
+                        time_t    st_atime;   // time of last access
+                        time_t    st_mtime;   // time of last modification
+                        time_t    st_ctime;   // time of last status change
+                    };
+        */
+        lstat(entry->d_name,&statbuf);
+
+        // if link ...
+        if(S_ISLNK(statbuf.st_mode)) {                      // S_ISLNK() is one of several macros to determine the nature of the file based on st_mode
+            // if link is named ttyUSBFT847 ....
+            if (strcmp("ttyUSBFT847",entry->d_name) == 0) {
+                char string[1024];
+                ssize_t iii;
+
+                //  readlink() takes the name of the link (1st parameter) and writes it to string[] (2nd parameter).  The max number of bytes is 3rd parameter.
+                iii = readlink(entry->d_name,string,sizeof(string));
+                if (iii <= 0) {         // readlink() number of bytes written to string[], -1 on error.
+                    printf("error1");
+                    return_value = -1;
+                    break;
+                }
+                string[iii] = 0; // null terminate
+                if ((strcmp("ttyUSB0",string) == 0) || (strcmp("ttyUSB1",string) == 0)) {
+                    printf("%s -> %s\n",entry->d_name,string);
+                    break;      // return_value is already set to 0
+                } else {
+                    printf("%s -> %s\n",entry->d_name,string);
+                    return_value = 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    //  move up one level in directory structure before returning.
+    chdir(currentDirectory);
+    closedir(dp);
+    return return_value;
 }
 
 

@@ -56,8 +56,8 @@ typedef struct Entry Entry;
 char *goldenCalls[] = { "KK6PR",     "KP4MD",  "W7PAU",  "KA7OEI-1", "AC0G",
                         "KPH",       "KV0S",   "WA2TP",  "W2ACR",    "KA7OEI/Q",
                         "AI6VN/KH6", "K6RFT",  "KV4TT",  "W3ENR",    "K1RA-PI",
-                        "W7WKR-K2",  "KV6X",   "N3IZN/SDR" };
-#define NUM_OF_GOLDEN_CALLS 18   // do this because "size_t n = sizeof(a) / sizeof(int);" won't work since each element is a different size.
+                        "W7WKR-K2",  "KV6X",   "N3IZN/SDR", "AA6RF" };
+#define NUM_OF_GOLDEN_CALLS 19   // do this because "size_t n = sizeof(a) / sizeof(int);" won't work since each element is a different size.
 
 int doCurl( struct BeaconData *beaconData, char* termPTSNum );
 
@@ -278,7 +278,8 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
                     //  ... and make sure that the grid square is not DM12 or DM13
                     if (
                             ( strstr(entries[iii]->reporterLocation,"DM12") == (char *)NULL ) &&
-                            ( strstr(entries[iii]->reporterLocation,"DM13") == (char *)NULL )
+                            ( strstr(entries[iii]->reporterLocation,"DM13") == (char *)NULL ) &&
+                            ( strstr(entries[iii]->reporterLocation,"DM14") == (char *)NULL )
                        ) {
                         char message[1024],string[1024];        // super long strings because I'm too lazy to compute the actual lengths and do a calloc().
 
