@@ -316,7 +316,7 @@ int main( int argc, char **argv ) {
                         printf("\rTemperature too high: %3.3lf F.  Waiting two minutes (%d min)               ",currentTemperature,heatWait);
                         fprintf(dupFile,"\rTemperature too high: %3.3lf F.  Waiting two minutes (%d min)               ",currentTemperature,heatWait);
                     }
-                    fflush(stdout);
+                    fflush(stdout);   fflush(dupFile);
                     // wait two minutes.
                     for (int kkk = 0; kkk < 120; kkk++) {
                         sleep(1);
