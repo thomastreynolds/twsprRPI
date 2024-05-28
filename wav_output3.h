@@ -3,7 +3,7 @@
 
 extern int initializePortAudio( void );
 extern void terminatePortAudio( void );
-extern int sendWSPRData( char *filename, float gainX );
+extern int sendWSPRData( char *filename, FILE* dupFile );
 extern pid_t pidof(const char* name);
 
 #endif

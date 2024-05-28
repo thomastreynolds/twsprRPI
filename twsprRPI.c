@@ -15,6 +15,8 @@
 
     * A fourth file, raw_reports_log.txt, records all stations that reported hearing my beacon.  The date is missing from the first year or so of this file.
 
+    * A fifth file, duplicate.txt, allows me to monitor the beacons from another computer allowing me to make QSOs using the idle time between beacons.
+
     pavucontrol is different for 6m and for 10m in order to get 10w output.  With gain = 1.0 (in wav_output2.c, global variable) on 10m the pavucontrol for this
     app runs about 39% while for 6m about 33%.  So in order to keep the pavucontrol the same (39%) for both I need to reduce the gain for 6m to 0.6.  So I added
     a gain parameter to sendWSPRData().  So:
@@ -60,6 +62,7 @@
 
 #define NO_WAIT_FIRST_BURST     1
 #define BLACKOUT_FILENAME       "blackout.txt"
+#define DUP_FILENAME            "duplicate.txt"             // used to monitor beacons from another computer allowing me to make QSOs using the idle time between beacons.
 
 extern int doCurl( struct BeaconData *beaconData, char* termPTSNum );
 
@@ -74,6 +77,7 @@ int SockAddrStructureSize2;             // for UDP message to SDRPlay
 static struct sockaddr_in adr_inet3;    // for UDP message to send Email
 int SockAddrStructureSize3;             // for UDP message to send Email
 static char lineToRemove[256] = "";     // for blackoutCheck() and blackoutUpdateFile()
+static FILE *dupFile;                   // for DUP_FILENAME, see comment above
 
 int sendUDPEmailMsg( char *message );
 int readConfigFileWSPRFreq( int convResult );
@@ -134,6 +138,12 @@ int main( int argc, char **argv ) {
         }
     }
 
+    dupFile = (FILE *)fopen(DUP_FILENAME,"wt");
+    if (dupFile == (FILE *)NULL) {
+        printf("Unable to open %s for append.\n",DUP_FILENAME);
+        return 1;
+    }
+
     if (initializeNetwork() == -1) { return -1; }
     if (initializePortAudio() == -1) { return -1; }
     if (ft847_open() == -1) { return -1; }
@@ -180,6 +190,7 @@ int main( int argc, char **argv ) {
     while (terminate == 0) {
         if (minCounter == 0) {
             printf("Wait %d min (<ENT>, *<ENT>, -<ENT>): ",minWait);  fflush( (FILE *)NULL );
+            fprintf(dupFile,"Wait %d min (<ENT>, *<ENT>, -<ENT>): ",minWait);  fflush( (FILE *)dupFile );
         }
 
         tv.tv_sec = 60;
@@ -226,6 +237,7 @@ int main( int argc, char **argv ) {
         minCounter++;
         if (minCounter < minWait) {
             printf("%0d ",minCounter);  fflush( (FILE *)NULL );
+            fprintf(dupFile,"%0d ",minCounter);  fflush( (FILE *)dupFile );
         } else {
             int beaconWasSent = 0;
             int beaconCounter = 0;
@@ -251,20 +263,23 @@ int main( int argc, char **argv ) {
                 break;
             }
             printf("Rx %d\nTx ",rx0FreqHz );
+            fprintf(dupFile,"Rx %d\nTx ",rx0FreqHz );
             for (int iii = 0; iii < MAX_NUMBER_OF_BEACONS; iii++) {         // zero out timestamp strings
                 //beaconData[iii].timestamp[0] = 0;                     // this is done in readConfigFile() as each beacon is read.
                 if (beaconData[iii].txFreqHz != 0) {
                     printf("%d  ",beaconData[iii].txFreqHz);
+                    fprintf(dupFile,"%d  ",beaconData[iii].txFreqHz);
                 }
             }
             printf("\n");
+            fprintf(dupFile,"\n");
             minWait = MINUTES_TO_WAIT;
 
             //
             //  Before starting the beacon code block check here if temperature is > 90 deg.  If so wait.
             //
             heatWait = 0;
-            printf("\n");
+            printf("\n");  fprintf(dupFile,"\n");
             while (terminate == 0) {
                 double currentTemperature = getTempData();
                 if (currentTemperature < TEMPERATURE_BEACON_MAX) { //  This will capture errors also.  getTempData() returns -1.0 on error and +1.0 if process not running.
@@ -296,8 +311,10 @@ int main( int argc, char **argv ) {
                     // print message on the screen
                     if (heatWaitPowerOff) {
                         printf("\rTemperature too high: %3.3lf F.  Waiting two minutes (%d min) with power OFF",currentTemperature,heatWait);
+                        fprintf(dupFile,"\rTemperature too high: %3.3lf F.  Waiting two minutes (%d min) with power OFF",currentTemperature,heatWait);
                     } else {
                         printf("\rTemperature too high: %3.3lf F.  Waiting two minutes (%d min)               ",currentTemperature,heatWait);
+                        fprintf(dupFile,"\rTemperature too high: %3.3lf F.  Waiting two minutes (%d min)               ",currentTemperature,heatWait);
                     }
                     fflush(stdout);
                     // wait two minutes.
@@ -312,6 +329,7 @@ int main( int argc, char **argv ) {
             }
             if (heatWait > 0) {
                 printf("\n");
+                fprintf(dupFile,"\n");
             }
 
             //
@@ -349,6 +367,7 @@ int main( int argc, char **argv ) {
             }
             minCounter = 0;
             printf("\n");
+            fprintf(dupFile,"\n\n");
         }
     }
 
@@ -356,6 +375,7 @@ int main( int argc, char **argv ) {
     ft847_close();
     terminatePortAudio();
     closeNetwork();
+    fclose(dupFile);
     printf("\n");
     return retval;
 }
@@ -364,7 +384,6 @@ int main( int argc, char **argv ) {
 //  This function is called as sleep ends.  It waits for the top of second and then initiates a send.
 static int txWspr( int rxFreq, struct BeaconData *beaconData ) { // txFreq, char* timestamp ) {
     int iii;
-    float gain = 1.0;
     char string[16];
     struct tm *info;
     time_t rawtime;         // time_t is long integer
@@ -457,7 +476,8 @@ static int txWspr( int rxFreq, struct BeaconData *beaconData ) { // txFreq, char
     info = gmtime( &rawtime );      // UTC
     sprintf(beaconData->timestamp,"%02d:%02d",info->tm_hour, info->tm_min);
     printf("Beacon freq %d Hz at %s:%02d UTC          \n", txFreq, beaconData->timestamp, info->tm_sec);
-    iii = sendWSPRData( beaconData->tone, gain );
+    fprintf(dupFile,"Beacon freq %d Hz at %s:%02d UTC          \n", txFreq, beaconData->timestamp, info->tm_sec);
+    iii = sendWSPRData( beaconData->tone, dupFile );
     if (iii) {
         printf("Error on sendWSPRData()\n");
     }
@@ -534,6 +554,7 @@ static int waitForTopOfEvenMinute( int txFreq ) {
 
     //   loop until top of minute
     printf("\nWaiting for top of even minute: ");  fflush( (FILE *)NULL );
+    fprintf(dupFile,"\nWaiting for top of even minute: ");  fflush( (FILE *)dupFile );
     while (1) {
         time( &rawtime );                   // rawtime is the number of seconds in the epoch (1/1/1970).  time() also returns the same value.
         info = localtime( &rawtime );       // info is the structure giving seconds and minutes
@@ -568,8 +589,8 @@ static int waitForTopOfEvenMinute( int txFreq ) {
 
         if (curSec != info->tm_sec) {
             curSec = info->tm_sec;
-            printf("\rWaiting for top of even minute: %02d %02d     ",info->tm_min,curSec);
-            fflush( (FILE *)NULL );
+            printf("\rWaiting for top of even minute: %02d %02d     ",info->tm_min,curSec);  fflush( (FILE *)NULL );
+            fprintf(dupFile,"\rWaiting for top of even minute: %02d %02d     ",info->tm_min,curSec);  fflush( (FILE *)dupFile );
         }
 
         {
@@ -581,7 +602,7 @@ static int waitForTopOfEvenMinute( int txFreq ) {
                     getchar();
                     NumBytesIn--;
                 }
-                printf("\r Press ENTER to resune.                     ");     fflush( (FILE *)NULL );
+                printf("\r Press ENTER to resume.                     ");     fflush( (FILE *)NULL );
                 getchar();
             }           //  if (NumBytesIn > 0)
         }
@@ -600,6 +621,7 @@ static int waitForTopOfEvenMinute( int txFreq ) {
     */
 
     printf("\r");
+    fprintf(dupFile,"\r");
     //printf("Current local time and date: %ld %d %d %d   %s ", rawtime, info->tm_hour, info->tm_min, info->tm_sec, asctime(info));
     return returnValue;
 }
@@ -707,6 +729,7 @@ static int readConfigFile( int *rxFreqHz, struct BeaconData *beaconData ) {
     clearerr(fptr);
     fclose(fptr);
     printf("\n\nNumber of beacons %d\n",numBeacons);
+    fprintf(dupFile,"\n\nNumber of beacons %d\n",numBeacons);
     if (*rxFreqHz == 0) {
         return -1;
     } else if (convResult < 0) {
@@ -779,7 +802,7 @@ static int readConfigFileHelp( char *string ) {
 }
 
 
-//  int findttyUSB( void ) - scans /dev directory looking for ttyUSBFT847.  If found and it points to ttyUSB0 or ttyUSB1 then return 0.
+//  int findttyUSB( void ) - scans /dev directory looking for ttyUSBFT847.  If found and it points to ttyUSB0 or ttyUSB1 or ttyUSB2 then return 0.
 //      return 1 if it points to anything else and -1 on error.
 static int findttyUSB( void ) {
     char directory[] = "/dev";
@@ -852,7 +875,7 @@ static int findttyUSB( void ) {
                     break;
                 }
                 string[iii] = 0; // null terminate
-                if ((strcmp("ttyUSB0",string) == 0) || (strcmp("ttyUSB1",string) == 0)) {
+                if ((strcmp("ttyUSB0",string) == 0) || (strcmp("ttyUSB1",string) == 0) || (strcmp("ttyUSB2",string) == 0)) {
                     printf("%s -> %s\n",entry->d_name,string);
                     break;      // return_value is already set to 0
                 } else {

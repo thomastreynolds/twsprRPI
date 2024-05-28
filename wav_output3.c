@@ -24,7 +24,7 @@
 
 int initializePortAudio( void );
 void terminatePortAudio( void );
-int sendWSPRData( char *filename, float gainX );
+int sendWSPRData( char *filename, FILE* dupFile );
 pid_t pidof(const char* name);
 
 int initializePortAudio( void ) {
@@ -38,7 +38,7 @@ void terminatePortAudio( void ) {
 }
 
 
-int sendWSPRData(char *filename, float gainX)
+int sendWSPRData(char *filename, FILE* dupFile )
 {
     struct tm *info;
     time_t rawtime;         // time_t is long integer
@@ -71,8 +71,8 @@ int sendWSPRData(char *filename, float gainX)
         info = localtime( &rawtime );       // info is the structure giving seconds and minutes
         if (curSec != info->tm_sec) {
             curSec = info->tm_sec;
-            printf("\rSending beacon %02d %02d (pid %d, file %s) ",info->tm_min,curSec,thepid,filename);
-            fflush( (FILE *)NULL );
+            printf("\rSending beacon %02d %02d (pid %d, file %s) ",info->tm_min,curSec,thepid,filename);  fflush( (FILE *)NULL );
+            fprintf(dupFile,"\rSending beacon %02d %02d (pid %d, file %s) ",info->tm_min,curSec,thepid,filename);  fflush( (FILE *)dupFile );
         }
         if (curSec == 30) {                         // at 30 seconds get the temperature.  Do it then because ds18b20 process writes a new value to the log
             currentTemperature = getTempData();     //      file at the top of each minute.
@@ -82,9 +82,9 @@ int sendWSPRData(char *filename, float gainX)
         }
         usleep(10000);
     }
-    printf("\r");
 
-    printf("Done sending beacon (%s, %3.3lf F)                      \n",filename,currentTemperature);
+    printf("\rDone sending beacon (%s, %3.3lf F)                      \n",filename,currentTemperature);
+    fprintf(dupFile,"\rDone sending beacon (%s, %3.3lf F)                      \n",filename,currentTemperature);
     return 0;
 }
 
