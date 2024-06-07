@@ -15,7 +15,8 @@
 
     * A fourth file, raw_reports_log.txt, records all stations that reported hearing my beacon.  The date is missing from the first year or so of this file.
 
-    * A fifth file, duplicate.txt, allows me to monitor the beacons from another computer allowing me to make QSOs using the idle time between beacons.
+    * A fifth file, duplicate.txt, allows me to monitor the beacons from another computer allowing me to make QSOs using the idle time between beacons.  I also
+    use it to print out debug lines.
 
     pavucontrol is different for 6m and for 10m in order to get 10w output.  With gain = 1.0 (in wav_output2.c, global variable) on 10m the pavucontrol for this
     app runs about 39% while for 6m about 33%.  So in order to keep the pavucontrol the same (39%) for both I need to reduce the gain for 6m to 0.6.  So I added
@@ -140,7 +141,7 @@ int main( int argc, char **argv ) {
 
     dupFile = (FILE *)fopen(DUP_FILENAME,"wt");
     if (dupFile == (FILE *)NULL) {
-        printf("Unable to open %s for append.\n",DUP_FILENAME);
+        printf("Unable to open %s for writing.\n",DUP_FILENAME);
         return 1;
     }
 
@@ -333,7 +334,7 @@ int main( int argc, char **argv ) {
             }
 
             //
-            //  Send beacons
+            //  Send beacons (the beacon block)
             //
             while (terminate == 0) {
                 //  Quit if done.  All unused beaconData[] entries are zero and are all at end of array so quit on first zero.
@@ -342,10 +343,11 @@ int main( int argc, char **argv ) {
                 }
 
                 //  Send beacon.  Fill in timestamp
-                if (txWspr(rx0FreqHz, &beaconData[beaconCounter])) { //beaconData[beaconCounter].txFreqHz, beaconData[beaconCounter].timestamp)) {
+                if (txWspr(rx0FreqHz, &beaconData[beaconCounter])) {
                     retval = -1;
                     break;
                 }
+
                 minWait -= 4;
                 beaconWasSent = 1;
                 beaconCounter++;

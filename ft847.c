@@ -183,8 +183,8 @@ static int ft847_writeMsg( unsigned char* msg ) {
 
 //  Put ft847 in Tx mode for digital
 int ft847_FETMOXOn( void ) {
-  if (ft847_initGPIO()) { return -1; }          // don't bother initializing GPIO until needed.  That way another program can use it.
-  if (GPIOInit == -1) { return -1; }
+  if (ft847_initGPIO()) { return -3; }          // don't bother initializing GPIO until needed.  That way another program can use it.
+  if (GPIOInit == -1) { return -2; }
   int iii = GPIOWrite(POUT, HIGH);
   //if (ft847_shutdownGPIO()) { return -1; }    // keep GPIO open while transmitting.  It once failed to open at end of burst and radio stayed in Tx mode for 3 hours.
   return iii;
