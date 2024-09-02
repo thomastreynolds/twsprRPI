@@ -249,8 +249,15 @@ static int GPIODirection(int pin, int dir)
   char path[DIRECTION_MAX];
   int fd;
 
-  snprintf(path, DIRECTION_MAX, "/sys/class/gpio/gpio%d/direction", pin);
-  fd = open(path, O_WRONLY);
+  //  This seemed to occasionally fail so retry up to 3 times with 10 mS delay between each try.
+  for (int iii = 0; iii < 3; iii++) {
+    snprintf(path, DIRECTION_MAX, "/sys/class/gpio/gpio%d/direction", pin);
+    fd = open(path, O_WRONLY);
+    if (-1 != fd) {
+      break;
+    }
+    usleep(10000);
+  }
   if (-1 == fd) {
     fprintf(stderr, "Failed to open gpio direction for writing!\n");
     return(-1);
