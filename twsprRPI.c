@@ -926,7 +926,7 @@ static int installSignalHandlers( int useMyHandlers ) {
 static int initializeNetwork( void ) {
     char *srvr_addr = "192.168.1.196";
     char *srvr_addr2 = "192.168.1.111";
-    char *srvr_addr3 = "192.168.1.48";
+    char *srvr_addr3 = "192.168.1.238"; //48";
 
     sock = socket(AF_INET,SOCK_DGRAM,0);
     if (sock == -1) {
