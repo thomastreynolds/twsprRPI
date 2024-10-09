@@ -21,7 +21,7 @@ I've made no attempt at optimization.  The last three C files are translated fro
 
 Enjoy!
 
-(Note on below screenshot - the two windows on the left show the program in operation.  The VLC window, upper left, and Firefox, lower left, are there because the station is remote.  I'm monitoring temperature and radio display.)
+(Note on below screenshot - the middle and right window show the program in operation.  The VLC window, upper left, and Firefox, lower left, are there because the station is remote.  I'm monitoring temperature and radio display.)
 
 ![screenshot](doc/screenshot.png)
 
