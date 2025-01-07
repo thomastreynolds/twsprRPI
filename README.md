@@ -1,5 +1,5 @@
 # twsprRPI
-A C program to send out WSPR beacons and then read and display reports from wsprnet.org.
+A C program to send out WSPR beacons and then display my reports from wsprnet.org.  Below is a typical screenshot of the program in operation.  More screenshots are in the doc/ directory.
 
 This program is written specific to my needs.  It is not a general solution for everyone.  I'm placing this in the public domain so anyone can use all or part of it as they see fit, subject to the MIT license.
 
@@ -20,3 +20,8 @@ The program was originally written on an Ubuntu box and then moved to a Raspberr
 I've made no attempt at optimization.  The last three C files are translated from WSJT-X Fortran code, used to compute azimuth and distance.
 
 Enjoy!
+
+(Note on below screenshot - the middle and right window show the program in operation.  The VLC window, upper left, and Firefox, lower left, are there because the station is remote.  I'm monitoring temperature and radio display.)
+
+![screenshot](doc/screenshot.png)
+
