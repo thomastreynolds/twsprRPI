@@ -132,8 +132,8 @@ int doCurl( struct BeaconData *beaconData, char* termPTSNum ) {
     }
     fclose(fptr);
 
-    printf("Num entries %d\n",numEntries);
-    printf("Num duplicates %d\n",numberOfDuplicates);
+    printf("Num entries %d                                \n",numEntries);
+    printf("Num duplicates %d                             \n",numberOfDuplicates);   
 
     if (goldenListNotEmpty()) {
         int headerNotPrinted = 1;

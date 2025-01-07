@@ -18,19 +18,11 @@
     * A fifth file, duplicate.txt, allows me to monitor the beacons from another computer allowing me to make QSOs using the idle time between beacons.  I also
     use it to print out debug lines.
 
-    pavucontrol is different for 6m and for 10m in order to get 10w output.  With gain = 1.0 (in wav_output2.c, global variable) on 10m the pavucontrol for this
-    app runs about 39% while for 6m about 33%.  So in order to keep the pavucontrol the same (39%) for both I need to reduce the gain for 6m to 0.6.  So I added
-    a gain parameter to sendWSPRData().  So:
-       Set pavucontrol slider for this app to 39%.
-       10m pass a gain parameter of 1.0.
-       6m pass a gain parameter of 0.6.
-    I could reduce the gain parameter even more and set the pavucontrol slider to 100% but this will limit the resolution that I have.
-
     Ideas:
-     - record who heard me into a .csv file, sort of my WSPR log of one way qsos.
      - steer radio to different frequencies, say 40 MHz for one hour every night, then 2m for one hour every night, 6m for one hour.  Will have to
-       change WSJT-X frequency.  The only way to do this automatically seems to be to save several --rig-name options.  There doesn't seem to be a
-       UDP message to change this or to close WSJT-X.  I'll have to rely on Linux to do that for me.
+       change WSJT-X frequency.  One way to do this automatically seems to be to save several --rig-name options.  There doesn't seem to be a UDP
+       UDP message to change this.  Another option is to use the different configurations.  It can be invoked via UDP but I experienced problems (a long
+       time ago) when switching between MSK144 and FT8.
 
 */
 #include <stdio.h>
@@ -50,6 +42,15 @@
 #include "wav_output3.h"
 #include "getTempData.h"
 
+
+#include <netinet/in.h>
+#include <net/if.h>
+
+#include <sys/types.h>
+#include <ifaddrs.h>
+
+#include <netdb.h>
+
 #define MINUTES_TO_WAIT     (BEACON_INTERVAL+1)
 #define SECONDS_TO_WAIT     (MINUTES_TO_WAIT*60)    //  Tx for 2 min, wait 25 min, then waitForTopOfEvenMinute() will wait for the next min, resulting in Tx 28 min apart.
 #define WSPR_DEFAULT_15M    (21094630)
@@ -64,6 +65,8 @@
 #define NO_WAIT_FIRST_BURST     1
 #define BLACKOUT_FILENAME       "blackout.txt"
 #define DUP_FILENAME            "duplicate.txt"             // used to monitor beacons from another computer allowing me to make QSOs using the idle time between beacons.
+#define UDP_TX_MESSAGE          "txMode;"
+#define DEFAULT_MY_IP           "192.168.1.105"
 
 extern int doCurl( struct BeaconData *beaconData, char* termPTSNum );
 
@@ -77,8 +80,12 @@ static struct sockaddr_in adr_inet2;    // for UDP message to SDRPlay// AF_INET
 int SockAddrStructureSize2;             // for UDP message to SDRPlay
 static struct sockaddr_in adr_inet3;    // for UDP message to send Email
 int SockAddrStructureSize3;             // for UDP message to send Email
+static struct sockaddr_in adr_clnt4;    // for receiving data, used in recvfrom() in two locations
+static int sockRx;                      // socket for receiving data from UDPRepeater4.py
+
 static char lineToRemove[256] = "";     // for blackoutCheck() and blackoutUpdateFile()
 static FILE *dupFile;                   // for DUP_FILENAME, see comment above
+static char myIP[ INET_ADDRSTRLEN ];
 
 int sendUDPEmailMsg( char *message );
 int readConfigFileWSPRFreq( int convResult );
@@ -97,6 +104,7 @@ static int installSignalHandlers( int useMyHandlers );
 static int initializeNetwork( void );
 static void closeNetwork( void );
 static int sendUDPMsg( int doingTx );
+static int getMyIPAddress( char *myIPAddress );
 static int blackoutCheck( time_t *blackoutEndTime );
 static int blackoutUpdateFile( void );
 static int doBlackout( void );
@@ -116,6 +124,7 @@ int main( int argc, char **argv ) {
     struct BeaconData beaconData[ MAX_NUMBER_OF_BEACONS ];
     char termPTSNum[4] = "";
     int heatWait = 0;
+    int resetSelectWait = 1;
 
     int rx0FreqHz = WSPR_DEFAULT_10M;
 
@@ -138,6 +147,11 @@ int main( int argc, char **argv ) {
             }
         }
     }
+
+    if (getMyIPAddress( myIP ) != 0) {
+        strcpy( myIP, DEFAULT_MY_IP );      // if error set default
+    }
+    printf("My IP Address %s\n",myIP);
 
     dupFile = (FILE *)fopen(DUP_FILENAME,"wt");
     if (dupFile == (FILE *)NULL) {
@@ -190,24 +204,74 @@ int main( int argc, char **argv ) {
     //      first beacon.  The loop then drops into the beacon block with one minute left.  The first call to txWspr() consumes that minute.
     while (terminate == 0) {
         if (minCounter == 0) {
-            printf("Wait %d min (<ENT>, *<ENT>, -<ENT>): ",minWait);  fflush( (FILE *)NULL );
-            fprintf(dupFile,"Wait %d min (<ENT>, *<ENT>, -<ENT>): ",minWait);  fflush( (FILE *)dupFile );
+            if (resetSelectWait) {      // I use this an an indication that a UDP message arrived.  In that case this has already been printed.  Don't do it again.
+                printf("Wait %d min (<ENT>, *<ENT>, -<ENT>): ",minWait);  fflush( (FILE *)NULL );
+                fprintf(dupFile,"Wait %d min (<ENT>, *<ENT>, -<ENT>): ",minWait);  fflush( (FILE *)dupFile );
+            }
         }
 
-        tv.tv_sec = 60;
-        tv.tv_usec = 0;
+        if (resetSelectWait) {
+            tv.tv_sec = 60;
+            tv.tv_usec = 0;
+        }
+        resetSelectWait = 1;    // cleared when a UDP message arrives, don't want to get out of sync with top-of-minute
 
         FD_ZERO(&rfds);
-        FD_SET(0, &rfds);       //  stdin is the only thing needed.  Mostly select() is just a sleep(60 sec) statement
+        FD_SET(0, &rfds);       //  stdin
+        FD_SET(sockRx, &rfds);
 
-        retval = select(/*(sock + 1)*/ 1, &rfds, NULL, NULL, &tv);
+        retval = select((sockRx + 1), &rfds, NULL, NULL, &tv);
         if (retval < 0) {
             if (terminate == 0) { printf("Error in select()\n"); } else { printf("Captured signal %d\n",signalCaptured); }
             break;
         }
         else if (retval > 0) {
-            if (FD_ISSET(0, &rfds)) {           //  If keyboard data.  Note I'm not putting the keyboard in raw mode so
-                //  The keyboard was hit.       //    nothing will happen unless I hit ENTER.
+            if (FD_ISSET(sockRx, &rfds)) {       //  if data on Ethernet port
+                //  Determine how many characters are waiting on the network port .....
+                ioctl(sockRx,TIOCINQ,&NumBytesIn);
+                if (NumBytesIn > 0) {
+                    unsigned int len_inet;
+                    int iii;
+                    unsigned char dgram[512];              // receive buffer
+
+                    len_inet = sizeof(adr_clnt4);
+                    iii = recvfrom(sockRx,
+                            dgram,          // receive buffer
+                            sizeof(dgram),  // max length (a constant her would be better).
+                            0,              // no flags
+                            (struct sockaddr *)&adr_clnt4,   // filled in by function
+                            &len_inet
+                            );
+                    if (iii < 0) {
+                        printf("UDP receive socket - recvfrom() failed\n");
+                        continue;
+                    }
+                    dgram[iii] = 0;
+
+                    //for (int jjj = 0; jjj < iii; jjj++) { printf("%02hhx ",dgram[jjj]); } printf("\n");   // print out bytes
+                    //printf("%s\n",(char *)dgram);     // print out message
+                    //printf("tv.tv_sec %ld\n",(long)tv.tv_sec);    // print out number of seconds left in select()
+
+                    //  If transmitting then make sure that we don't transmit in the next two minutes.
+                    if (strcmp(UDP_TX_MESSAGE,(char *)dgram) == 0) {
+
+                        //  if it is close to starting the beacon sequence (minWait is signed so if minWait < 3 (unlikely) the IF statement will still do the right thing)
+                        if (minCounter > (minWait-3)) {
+                            if (minCounter < 2) {      // (won't happen the way I use it, minCounter counts up not down)
+                                minCounter = 0;
+                            } else {
+                                minCounter -=2;         // add two minutes to wait
+                            }
+                            printf("+2 ");  fflush( (FILE *)NULL );
+                            fprintf(dupFile,"+2 ");  fflush( (FILE *)dupFile );
+                        }
+                    }
+                    resetSelectWait = 0;    // continue with whatever seconds are left in select() 60 second sleep so it stays in sync with top-of-minute
+                    continue;               // necessary to avoid minCounter being bumped below.
+                }
+            }
+            else if (FD_ISSET(0, &rfds)) {          //  If keyboard data.  Note I'm not putting the keyboard in raw mode so
+                //  The keyboard was hit.           //    nothing will happen unless I hit ENTER.
                 ioctl(0,TIOCINQ,&NumBytesIn);
                 if (NumBytesIn > 0) {
                     int iii = getchar();
@@ -400,22 +464,22 @@ static int txWspr( int rxFreq, struct BeaconData *beaconData ) { // txFreq, char
             else if (dtemperature > 71.0) { txFreq = 144489210; }
             else if (dtemperature > 70.0) { txFreq = 144489200; }
             else if (dtemperature > 68.5) { txFreq = 144489170; }
-            else if (dtemperature > 67.5) { txFreq = 144489150; }
-            else if (dtemperature > 66.5) { txFreq = 144489140; }
-            else if (dtemperature > 64.8) { txFreq = 144489130; }
-            else if (dtemperature > 61.0) { txFreq = 144489120; }
-            else if (dtemperature > 59.4) { txFreq = 144489110; }
-            else if (dtemperature > 57.5) { txFreq = 144489100; }
-            else if (dtemperature > 56.3) { txFreq = 144489090; }
-            else if (dtemperature > 55.3) { txFreq = 144489080; }
-            else if (dtemperature > 54.1) { txFreq = 144489070; }
-            else if (dtemperature > 53.1) { txFreq = 144489060; }
-            else if (dtemperature > 52.1) { txFreq = 144489050; }
-            else if (dtemperature > 50.6) { txFreq = 144489040; }
-            else if (dtemperature > 50.0) { txFreq = 144489030; }
-            else if (dtemperature > 46.6) { txFreq = 144489020; }
-            else if (dtemperature > 45.3) { txFreq = 144489030; }    // below 45.3 it seems to go up again.
-            else { txFreq = 144489040; }                             // No data belo 44.3 deg
+            else if (dtemperature > 67.5) { txFreq = 144489140; }
+            else if (dtemperature > 66.5) { txFreq = 144489130; }
+            else if (dtemperature > 64.8) { txFreq = 144489120; }
+            else if (dtemperature > 61.0) { txFreq = 144489110; }
+            else if (dtemperature > 59.4) { txFreq = 144489100; }
+            else if (dtemperature > 57.5) { txFreq = 144489090; }
+            else if (dtemperature > 56.3) { txFreq = 144489080; }
+            else if (dtemperature > 55.3) { txFreq = 144489070; }
+            else if (dtemperature > 54.1) { txFreq = 144489060; }
+            else if (dtemperature > 53.1) { txFreq = 144489050; }
+            else if (dtemperature > 52.1) { txFreq = 144489040; }
+            else if (dtemperature > 50.6) { txFreq = 144489030; }
+            else if (dtemperature > 50.0) { txFreq = 144489020; }
+            else if (dtemperature > 46.6) { txFreq = 144489010; }
+            else if (dtemperature > 45.3) { txFreq = 144489020; }    // below 45.3 it seems to go up again.
+            else { txFreq = 144489030; }                             // No data belo 44.3 deg
         }
     } else if (txFreq > 50000000) {                 // set gain based on freq: 0.8 for 2m, 0.6 for 6m and 1.0 for 10m/15m, an FT847 quirk.
         double dtemperature = getTempData();
@@ -428,9 +492,9 @@ static int txWspr( int rxFreq, struct BeaconData *beaconData ) { // txFreq, char
             else if (dtemperature > 73.5) { txFreq = 50293070; }
             else if (dtemperature > 70.5) { txFreq = 50293060; }
             else if (dtemperature > 67.5) { txFreq = 50293050; }
-            else if (dtemperature > 65.0) { txFreq = 50293040; }
-            else if (dtemperature > 56.0) { txFreq = 50293030; }
-            else if (dtemperature > 51.0) { txFreq = 50293020; }
+            else if (dtemperature > 65.0) { txFreq = 50293030; }
+            else if (dtemperature > 56.0) { txFreq = 50293020; }
+            else if (dtemperature > 51.0) { txFreq = 50293010; }
             else if (dtemperature > 45.2) { txFreq = 50293010; }
             else { txFreq = 50293020; }                             // data below 45.2 seems to go up again, no data below 44.15
         }
@@ -532,8 +596,14 @@ static char *getWavFilename( int txFreq ) {
 
 
 //  This function delays until the top of an even second, at which point it will return.  Three seconds before the top of
-//      even second it will set the radio to txFreq unless txFreq == 0
+//      even second it will set the radio to txFreq unless txFreq == 0.  Once that is done it will return in three seconds.
+//      Prior to that, and if txFreq != 0, the user can hit enter to suspend loop.  Hit enter again to resume.
+//      Also, prior to that and again if txFreq != 0, if a UDP message arrives indicating that the FT847 is transmitting then
+//      it will wait 60 seconds before continuing looking for top-of-even-minute.
 //  Later I added code to check blackout.txt in order to see if it needs to delay things for a satellite pass.
+//  Later I modified it to check if ENTER key is pressed and halt countdown if so.
+//  Later checked for a UDP message indicating transmit.  If received it delays things for one minute.  Specifically, with each
+//      transmit UDP message it resets delayUDPTimer (local variable) to 60.
 static int waitForTopOfEvenMinute( int txFreq ) {
     /*  struct tm {
             int tm_sec;         // seconds
@@ -551,6 +621,8 @@ static int waitForTopOfEvenMinute( int txFreq ) {
     int curSec = 0;          // debug for display
     int returnValue = 0;
     int freqChangeDone = 0;     // flag
+    int NumBytesIn;
+    int delayUDPTimer = 0;
 
     doBlackout();
 
@@ -561,21 +633,26 @@ static int waitForTopOfEvenMinute( int txFreq ) {
         time( &rawtime );                   // rawtime is the number of seconds in the epoch (1/1/1970).  time() also returns the same value.
         info = localtime( &rawtime );       // info is the structure giving seconds and minutes
 
-        if (info->tm_sec == 0) {            // if top of minute
-            int isOdd = info->tm_min % 2;   // ... and this is an even minute
-            if (!isOdd) {                   // ... then break
-                break;
+        //  This is the usual exit from loop and from function
+        if (delayUDPTimer == 0) {                   // if not delayed due to UDP message indicating transmit.  delayUDPTimer will be zero if txFreq == 0.
+            if ((freqChangeDone) || (txFreq==0)) {  // ... and already changed frequency at 57 seconds before top of even minute OR if txFreq == 0 meaning no freq change
+                if (info->tm_sec == 0) {            // ... and now top of minute
+                    int isOdd = info->tm_min % 2;   // ... and this is an even minute
+                    if (!isOdd) {                   // ... then break with returnValue == 0 (no error)
+                        break;
+                    }
+                }
             }
         }
 
         //  If three seconds before the top of even second set the radio to txFreq (unless txFreq == 0)
-        if (!freqChangeDone) {
+        if ( (!freqChangeDone) && (delayUDPTimer == 0) ) {      // check that it's not already been done and no delay timer running.
             if (txFreq) {                                       // if txFreq != 0
                 if (info->tm_sec == 57) {                       // if 57 second
                     int isOdd = info->tm_min % 2;               // ... and this is an odd minute
                     if (isOdd) {                                // ... write freq change
                         if (ft847_writeFreqHz( txFreq )) {      // set radio to transmit frequency
-                            returnValue = 1;
+                            returnValue = 1;    // if error
                             break;
                         }
                         freqChangeDone = 1;
@@ -589,15 +666,23 @@ static int waitForTopOfEvenMinute( int txFreq ) {
             break;
         }
 
+        //  Display
         if (curSec != info->tm_sec) {
             curSec = info->tm_sec;
-            printf("\rWaiting for top of even minute: %02d %02d     ",info->tm_min,curSec);  fflush( (FILE *)NULL );
-            fprintf(dupFile,"\rWaiting for top of even minute: %02d %02d     ",info->tm_min,curSec);  fflush( (FILE *)dupFile );
+            if (delayUDPTimer) {
+                delayUDPTimer--;
+                printf("\rOne minute delay for transmission: %02d       ",delayUDPTimer);  fflush( (FILE *)NULL );
+                fprintf(dupFile,"\rOne minute delay for transmission: %02d       ",delayUDPTimer);  fflush( (FILE *)dupFile );
+            } else {
+                printf("\rWaiting for top of even minute: %02d %02d     ",info->tm_min,curSec);  fflush( (FILE *)NULL );
+                fprintf(dupFile,"\rWaiting for top of even minute: %02d %02d     ",info->tm_min,curSec);  fflush( (FILE *)dupFile );
+            }
         }
 
-        {
-            int NumBytesIn;
+        //  Check for ENTER or for UDP message
+        if ((txFreq) && (!freqChangeDone)) {      // don't allow ENTER key or UDP message to stop beacon if frequency has already been changed or if txFreq == 0
 
+            //  Check for ENTER key to suspend
             ioctl(0,TIOCINQ,&NumBytesIn);
             if (NumBytesIn > 0) {
                 while ( NumBytesIn > 0 ) {  //  Swallow ENTER and everything before it.
@@ -606,9 +691,36 @@ static int waitForTopOfEvenMinute( int txFreq ) {
                 }
                 printf("\r Press ENTER to resume.                     ");     fflush( (FILE *)NULL );
                 getchar();
-            }           //  if (NumBytesIn > 0)
-        }
+            }
 
+            //  Check for data on network port
+            ioctl(sockRx,TIOCINQ,&NumBytesIn);
+            if (NumBytesIn > 0) {
+                unsigned int len_inet;
+                int iii;
+                unsigned char dgram[512];              // receive buffer
+
+                len_inet = sizeof(adr_clnt4);
+                iii = recvfrom(sockRx,
+                        dgram,          // receive buffer
+                        sizeof(dgram),  // max length (a constant her would be better).
+                        0, //MSG_DONTWAIT,
+                        (struct sockaddr *)&adr_clnt4,   // filled in by function
+                        &len_inet
+                        );
+                if (iii < 0) {
+                    printf("UDP receive socket - recvfrom() failed\n");
+                    continue;
+                }
+                if (iii > 0) {
+                    dgram[iii] = 0;
+                    if (strcmp(UDP_TX_MESSAGE,(char *)dgram) == 0) {
+                        delayUDPTimer = 60;
+                    }
+                    //printf("%s %d\n",(char *)dgram,delayUDPTimer);
+                }
+            }
+        }
 
         usleep(10000);
     }
@@ -745,6 +857,7 @@ static int readConfigFile( int *rxFreqHz, struct BeaconData *beaconData ) {
 //  Verify that the frequency is a WSPR frequency.  Returns 0 if so and -1 if not.  Note that I'm not checking for one freq on each band.  So
 //      there is noting to stop me from sending a WSPR message on the same frequency several times in a row.
 int readConfigFileWSPRFreq( int convResult ) {
+    if ( readConfigFileWSPRFreqHelp( convResult, WSPR_30M ) == 0 ) { return 0; }
     if ( readConfigFileWSPRFreqHelp( convResult, WSPR_17M ) == 0 ) { return 0; }
     if ( readConfigFileWSPRFreqHelp( convResult, WSPR_15M ) == 0 ) { return 0; }
     if ( readConfigFileWSPRFreqHelp( convResult, WSPR_12M ) == 0 ) { return 0; }
@@ -924,9 +1037,10 @@ static int installSignalHandlers( int useMyHandlers ) {
 
 
 static int initializeNetwork( void ) {
-    char *srvr_addr = "192.168.1.196";
-    char *srvr_addr2 = "192.168.1.111";
-    char *srvr_addr3 = "192.168.1.238"; //48";
+    char *srvr_addr = "192.168.1.196";          // sdrsharp, indicating transition from Tx to Rx
+    char *srvr_addr2 = "192.168.1.111";         // sdruno, indicating transition from Tx to Rx
+    char *srvr_addr3 = "192.168.1.238";         // email
+    struct sockaddr_in adr_inet4;               // for receiving messages, only used here.
 
     sock = socket(AF_INET,SOCK_DGRAM,0);
     if (sock == -1) {
@@ -967,11 +1081,31 @@ static int initializeNetwork( void ) {
     }
     SockAddrStructureSize3 = sizeof(adr_inet3);
 
+    //  for receiving UDP messages
+    sockRx = socket(AF_INET,SOCK_DGRAM,0);
+    if (-1 == sockRx) {
+        printf("Cannot create UDP receive socket\n");
+        return -1;
+    }
+    memset(&adr_inet4,0,sizeof(adr_inet4));
+    adr_inet4.sin_family = AF_INET;
+    adr_inet4.sin_port = htons(9090);                        // host to network conversion of short (16 bit) value
+    adr_inet4.sin_addr.s_addr = inet_addr(myIP);  // convert string to network byte order address and store in s_addr
+    if (adr_inet4.sin_addr.s_addr == INADDR_NONE) {
+        printf("UDP receive socket - adr_inet4.sin_addr.s_addr == INADDR_NONE\n");
+        return -1;
+    }
+    if (-1 == bind(sockRx,(struct sockaddr *)&adr_inet4,sizeof(adr_inet4))) {   // bind this address to this socket
+        printf("UDP receive socket - bind() failed\n");
+        return -1;
+    }
+
     return 0;
 }
 
 
 static void closeNetwork( void ) {
+    close(sockRx);
     close(sock);
 }
 
@@ -1032,6 +1166,60 @@ int sendUDPEmailMsg( char *message ) {
     return 0;
 }
 
+
+static int getMyIPAddress( char *myIPAddress ){
+
+    //  This is my favorite method.  It requires no knowledge of the interface.  Since it's SOCK_DGRAM it doesn't make a TCP connection and
+    //      the IP 192.168.1.146 does not even have to exist.  It also works with 8.8.8.8.
+
+    static int socktemp;                  // socket for receiving data from UDPRepeater4.py
+    struct sockaddr_in inet_adr;          // for receiving messages, only used here.
+    int iii;
+    socklen_t structlength;               // unsigned int
+
+    /* The equivalent Python code
+    sss = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sss.connect(("192.168.1.146", 80))
+    myIP = sss.getsockname()[0]
+    sss.close() */
+
+    socktemp = socket(AF_INET,SOCK_DGRAM,0);
+    if (-1 == socktemp) {
+        printf("getMyIPAddress() - cannot create temp socket\n");
+        return -1;
+    }
+
+    memset(&inet_adr,0,sizeof(inet_adr));
+    inet_adr.sin_family = AF_INET;
+    inet_adr.sin_port = htons(9090);                        // host to network conversion of short (16 bit) value
+    inet_adr.sin_addr.s_addr = inet_addr("192.168.1.146");  // convert string to network byte order address and store in s_addr
+    if (inet_adr.sin_addr.s_addr == INADDR_NONE) {
+        printf("getMyIPAddress() - inet_adr.sin_addr.s_addr == INADDR_NONE\n");
+        return -1;
+    }
+
+    iii = connect( socktemp, (struct sockaddr *)&inet_adr, sizeof(inet_adr) );
+    if (-1 == iii) {
+        printf("getMyIPAddress() - Error in connect\n");
+        return -1;
+    }
+    iii = getsockname( socktemp, (struct sockaddr *)&inet_adr, &structlength );
+    if (-1 == iii) {
+        printf("getMyIPAddress() - Error in getsockname\n");
+        return -1;
+    }
+    //printf("length %d\n",structlength);
+    {
+        struct sockaddr_in* pV4Addr = (struct sockaddr_in*)&inet_adr;
+        struct in_addr ipAddr = pV4Addr->sin_addr;
+        char string[INET_ADDRSTRLEN];
+        inet_ntop( AF_INET, &ipAddr, string, INET_ADDRSTRLEN );
+        strcpy( myIPAddress, string );
+    }
+
+    close(socktemp);
+    return(0);
+}
 
 
 //

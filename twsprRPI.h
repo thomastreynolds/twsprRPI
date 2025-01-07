@@ -5,6 +5,7 @@
                                                     // SHOULD always be divisible by 4.
 #define MAX_NUMBER_OF_BEACONS   (BEACON_INTERVAL/4) // this is the max number of beacons that will fit in BEACON_INTERVAL
 
+#define WSPR_30M            (10138700)
 #define WSPR_17M            (18104600)
 #define WSPR_15M            (21094600)
 #define WSPR_12M            (24924600)
