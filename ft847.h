@@ -6,6 +6,7 @@ extern int ft847_close( void );
 extern int ft847_FETMOXOn( void );
 extern int ft847_FETMOXOff( void );
 extern int ft847_writeFreqHz( int freq );
+extern int ft847_setUSBMode( void );
 /*
 extern int ft847_PTTOn( void );
 extern int ft847_PTTOff( void );

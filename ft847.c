@@ -113,6 +113,21 @@ int ft847_writeFreqHz( int freq ) {
 }
 
 
+int ft847_setUSBMode( void ) {
+  unsigned char msg[5] = { 0x01, 0x00, 0x00, 0x00, 0x07 };
+  int returnValue = 0;
+
+  if (ft847_CATOn()) { return -1; }
+  if (ft847_write( msg, "ft847_setUSBMode" )) {
+    returnValue = -1;                   // if error on ft847_write() then attempt to turn CAT off but always return error.
+    ft847_CATOff();
+  } else {
+    returnValue = ft847_CATOff();       // else if no error on ft847_write() then call ft847_CATOff() and respect its return value.
+  }
+  return returnValue;
+}
+
+
 static unsigned char ConvertOneByte( char upperChar, char lowerChar ) {
   unsigned char ReturnValue = 0x00;
   unsigned char upper, lower;

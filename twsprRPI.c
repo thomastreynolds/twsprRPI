@@ -189,6 +189,12 @@ int main( int argc, char **argv ) {
         return 1;
     }
 
+    usleep(10000);
+    if (ft847_setUSBMode()) {           // sometimes I have the radio in FM mode before starting this program.  If I don't set it to USB then
+        return 1;                       //      it will send out 100w when MOX is asserted and stay there for two minutes.
+    }
+
+
     //
     //  Main Loop
     //
