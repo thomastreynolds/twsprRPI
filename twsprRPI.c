@@ -37,6 +37,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <ctype.h>
 #include "ft847.h"
 #include "twsprRPI.h"
 #include "wav_output3.h"
@@ -112,7 +113,9 @@ static int doBlackout( void );
 
 static void SignalHandler( int signal ) {
     signalCaptured = signal;
-    terminate = 1;
+    if (signalCaptured != SIGUSR1) {        // SIGUSR1 (signal 10) is used to complete the beacon block and then quit.
+        terminate = 1;                      //      All other signals will quit right away.
+    }
 }
 
 
@@ -406,6 +409,8 @@ int main( int argc, char **argv ) {
             //
             //  Send beacons (the beacon block)
             //
+            printf("ENTER: pause, X-ENTER: abort beacon, CTRL-C quit,\n  signal 10 complete beacons then quit\n");
+            fprintf(dupFile,"ENTER: pause, X-ENTER: abort beacon, CTRL-C quit,\n  signal 10 complete beacons then quit\n");
             while (terminate == 0) {
                 //  Quit if done.  All unused beaconData[] entries are zero and are all at end of array so quit on first zero.
                 if (beaconData[ beaconCounter ].txFreqHz == 0) {
@@ -440,6 +445,10 @@ int main( int argc, char **argv ) {
             minCounter = 0;
             printf("\n");
             fprintf(dupFile,"\n\n");
+        }
+
+        if (signalCaptured == SIGUSR1) {        //  if signal 10 received during beacons then quit
+            break;
         }
     }
 
@@ -610,6 +619,8 @@ static char *getWavFilename( int txFreq ) {
 //  Later I modified it to check if ENTER key is pressed and halt countdown if so.
 //  Later checked for a UDP message indicating transmit.  If received it delays things for one minute.  Specifically, with each
 //      transmit UDP message it resets delayUDPTimer (local variable) to 60.
+//  Later I modified the check for ENTER key to also check for 'X' prior to ENTER.  If so returns non-zero which causes the
+//      beacon block to quit and still do doCurl().
 static int waitForTopOfEvenMinute( int txFreq ) {
     /*  struct tm {
             int tm_sec;         // seconds
@@ -691,9 +702,18 @@ static int waitForTopOfEvenMinute( int txFreq ) {
             //  Check for ENTER key to suspend
             ioctl(0,TIOCINQ,&NumBytesIn);
             if (NumBytesIn > 0) {
+                int terminateButDoCurl = 0;
                 while ( NumBytesIn > 0 ) {  //  Swallow ENTER and everything before it.
-                    getchar();
+                    if ((unsigned char)toupper(getchar()) == 'X') {
+                        terminateButDoCurl = 1;
+                    }
                     NumBytesIn--;
+                }
+                if (terminateButDoCurl) {
+                    printf("Terminating beacon loop\n");
+                    fprintf(dupFile,"Terminating beacon loop\n");
+                    returnValue = 1;
+                    break;
                 }
                 printf("\r Press ENTER to resume.                     ");     fflush( (FILE *)NULL );
                 getchar();

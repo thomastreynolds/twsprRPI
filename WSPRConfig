@@ -1,5 +1,5 @@
 #rxFreqHz  7074000
-rxFreqHz  10136000
+#rxFreqHz  10136000
 #rxFreqHz  10138700
 #rxFreqHz  14074000
 #rxFreqHz  18100000
@@ -9,7 +9,7 @@ rxFreqHz  10136000
 #rxFreqHz  21140000
 #rxFreqHz  24915000
 #rxFreqHz  24924620
-#rxFreqHz  28074000
+rxFreqHz  28074000
 #rxFreqHz  28124640
 #rxFreqHz  28180000
 #rxFreqHz  50260000
