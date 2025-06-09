@@ -97,6 +97,7 @@ static int readConfigFileWSPRFreqHelp( int convResult, int WSPRFreq );
 static int readConfigFileHelp( char *string );
 static void SignalHandler( int signal );
 static int txWspr( int rxFreq, struct BeaconData *beaconData); //, int txFreq, char* timestamp );
+static int radio_receive_freq( int rxFreq );
 static char *getWavFilename( int txFreq );
 static int waitForTopOfEvenMinute( int txFreq );
 static int updateFiles( char *eventName );
@@ -293,7 +294,7 @@ int main( int argc, char **argv ) {
                         if (45 == iii) {            // if '-' then cut the wait time short
                             minCounter = minWait;
                         } else if (42 == iii) {     // if '*' then read the config file and change Rx freq
-                            if (readConfigFile( &rx0FreqHz, beaconData ) || (ft847_writeFreqHz( rx0FreqHz ))) {
+                            if (readConfigFile( &rx0FreqHz, beaconData ) || (radio_receive_freq( rx0FreqHz ))) {
                                 retval = -1;
                                 break;
                             }
@@ -332,7 +333,7 @@ int main( int argc, char **argv ) {
                 retval = -1;    // on error or if rx0FreqHz == 0
                 break;
             }
-            if (ft847_writeFreqHz( rx0FreqHz )) {                 // set radio to newly read frequency.  It happens again at the end of txWspr() but I don't want to wait.
+            if (radio_receive_freq( rx0FreqHz )) {                 // set radio to newly read frequency.  It happens again at the end of txWspr() but I don't want to wait.
                 retval = -1;    // on error or if rx0FreqHz == 0
                 break;
             }
@@ -583,10 +584,57 @@ static int txWspr( int rxFreq, struct BeaconData *beaconData ) { // txFreq, char
 
     // set radio back to receive frequency
     usleep(1500000);                        // sleep for 1.5 seconds in case this function is called again.  Need waitForTopOfEvenMinute() to progress past sec == 0
-    if (ft847_writeFreqHz( rxFreq )) {
+    if (radio_receive_freq( rxFreq )) {
         return 1;
     }
     return iii;
+}
+
+//  This function will add frequency compensation to 6m WSPR and MSK144 frequencies.  If not a 6m frequency then just call ft847_writeFreqHz()
+static int radio_receive_freq( int rxFreq ) {
+    int rxFreqUsed = rxFreq;
+    int rxFreqMhz = rxFreq / 1000;
+
+    if ( rxFreqMhz == 50293 ) {
+      fprintf(stderr,"Inside freq compensation\n");
+      // exactly the same frequency compensation used in txWspr() above.  Should be made into a function.
+      double dtemperature = getTempData();
+      if ( dtemperature < 90.0 ) {
+          if (dtemperature > 84.0) { rxFreqUsed = 50293160; }         // 86 deg 50293.160 puts the beacon in the middle of the 200 Hz WSPR passband
+          else if (dtemperature > 81.0) { rxFreqUsed = 50293130; }    // 82 deg 50293.130
+          else if (dtemperature > 78.0) { rxFreqUsed = 50293100; }
+          else if (dtemperature > 77.0) { rxFreqUsed = 50293090; }
+          else if (dtemperature > 75.0) { rxFreqUsed = 50293080; }
+          else if (dtemperature > 73.5) { rxFreqUsed = 50293070; }
+          else if (dtemperature > 70.5) { rxFreqUsed = 50293060; }
+          else if (dtemperature > 67.5) { rxFreqUsed = 50293050; }
+          else if (dtemperature > 65.0) { rxFreqUsed = 50293030; }
+          else if (dtemperature > 56.0) { rxFreqUsed = 50293020; }
+          else if (dtemperature > 51.0) { rxFreqUsed = 50293010; }
+          else if (dtemperature > 45.2) { rxFreqUsed = 50293010; }
+          else { rxFreqUsed = 50293020; }                             // data below 45.2 seems to go up again, no data below 44.15
+      }
+    }
+    else if ( rxFreqMhz == 50260 ) {
+        double dtemperature = getTempData();
+        if ( dtemperature < 90.0 ) {
+            if (dtemperature > 84.0) { rxFreqUsed = 50260160; }
+            else if (dtemperature > 81.0) { rxFreqUsed = 50260130; }
+            else if (dtemperature > 78.0) { rxFreqUsed = 50260100; }
+            else if (dtemperature > 77.0) { rxFreqUsed = 50260090; }
+            else if (dtemperature > 75.0) { rxFreqUsed = 50260080; }
+            else if (dtemperature > 73.5) { rxFreqUsed = 50260070; }
+            else if (dtemperature > 70.5) { rxFreqUsed = 50260060; }
+            else if (dtemperature > 67.5) { rxFreqUsed = 50260050; }
+            else if (dtemperature > 65.0) { rxFreqUsed = 50260030; }
+            else if (dtemperature > 56.0) { rxFreqUsed = 50260020; }
+            else if (dtemperature > 51.0) { rxFreqUsed = 50260010; }
+            else if (dtemperature > 45.2) { rxFreqUsed = 50260010; }
+            else { rxFreqUsed = 50260020; }
+        }
+    }
+
+    return ft847_writeFreqHz( rxFreqUsed );
 }
 
 
@@ -793,11 +841,11 @@ static int updateFiles( char *eventName ) {
 }
 
 
-//  Read config file, get data, and close it again.  That way the file can be minipulated between bursts.
+//  Read config file, get data, and close it again.  That way the file can be manipulated between bursts.
 //      If rxFreq == 0 then return error and let the program quit.
 //      If any of the frequencies are not correct return error.
-//          rx0FreqHz not within 1.8 MHz - 450 MHz
-//          tx1FreqHz, tx2FreqHz, tx3FreqHz, or tx4FreqHz not a frequency (not all numbers).  If not WSPR freq
+//          rxFreqHz not within 1.8 MHz - 450 MHz
+//          beaconData[].txFreqHz not a frequency (not all numbers).  If not WSPR freq
 //              then the frequency will be zero and no beacon will take place but no error returned.
 static int readConfigFile( int *rxFreqHz, struct BeaconData *beaconData ) {
     FILE *fptr;
