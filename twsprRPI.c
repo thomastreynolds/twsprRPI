@@ -1,5 +1,5 @@
 /*
-    gcc -g -Wall -o twsprRPI twsprRPI.c wav_output3.c ft847.c wsprnet.c azdist.c geodist.c grid2deg.c getTempData.c -lrt -lm -lasound -pthread
+    gcc -g -Wall -o twsprRPI twsprRPI.c wav_output3.c ft847.c wsprnet.c azdist.c geodist.c grid2deg.c getTempData.c pulseaudio.c pskreporter.c -lrt -lm -lasound -pthread
 
     When running direct stderr to null with
         ./twsprRPI 2>/dev/null
@@ -24,6 +24,12 @@
        UDP message to change this.  Another option is to use the different configurations.  It can be invoked via UDP but I experienced problems (a long
        time ago) when switching between MSK144 and FT8.
 
+    The FT8 integration is almost complete.  Still to do:
+    - send dupfile over to pskreporter (?)
+    - set FT8 freq to 50 MHz
+    - maybe send FT8 within beacon block, repeating 50 MHz FT8 at 15 seconds past the odd minute.  The last FT8 transmission will be 2:45 before the
+      call to pskreporter.  Can even move pskreporter call to just before call to wsprnet, that way there will be 4:45 between them.
+    - modify pskreporter.c to send Email if 6m or 2m heard me
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,7 +48,8 @@
 #include "twsprRPI.h"
 #include "wav_output3.h"
 #include "getTempData.h"
-
+#include "pulseaudio.h"
+#include "pskreporter.h"
 
 #include <netinet/in.h>
 #include <net/if.h>
@@ -58,6 +65,12 @@
 #define WSPR_DEFAULT_10M    (28124620)
 #define WSPR_DEFAULT_6M     (50293080)
 #define WSPR_DEFAULT_2M     (144489110)
+#define FT8_21MHZ           (21074000)
+#define FT8_24MHZ           (24915000)
+#define FT8_28MHZ           (28074000)
+#define FT8_50MHZ           (50313000)
+#define FT8_144MHZ          (144174000)
+
 #define CONFIG_FILENAME     "WSPRConfig"
 #define TEMPERATURE_BEACON_MAX          ((double)85.0)                  // stop sending beacons above this temperature
 #define TEMPERATURE_POWER_OFF           (TEMPERATURE_BEACON_MAX+5.0)    // power down radio above this temperature
@@ -97,9 +110,10 @@ static int readConfigFileWSPRFreqHelp( int convResult, int WSPRFreq );
 static int readConfigFileHelp( char *string );
 static void SignalHandler( int signal );
 static int txWspr( int rxFreq, struct BeaconData *beaconData); //, int txFreq, char* timestamp );
+static int txFT8( int rxFreq, int txFreq, int target );
 static int radio_receive_freq( int rxFreq );
 static char *getWavFilename( int txFreq );
-static int waitForTopOfEvenMinute( int txFreq );
+static int waitForTopOfEvenMinute( int txFreq, int target );
 static int updateFiles( char *eventName );
 static int findttyUSB( void );
 static int installSignalHandlers( int useMyHandlers );
@@ -318,6 +332,8 @@ int main( int argc, char **argv ) {
             int beaconCounter = 0;
             int heatWaitInLog = 0;
             int heatWaitPowerOff = 0;
+            int ft8WasSent = 0;
+            time_t firstTxTime;
 
             //  Before starting make sure /dev/ttyUSBFT847 still points to ttyUSB0 or ttyUSB1.  If it points to something else then the USB to RS232 port
             //      is going south.  See 4/25/2024 entry in LinuxNotes2.docx or RaspberryPiNotes.docx
@@ -407,17 +423,39 @@ int main( int argc, char **argv ) {
                 fprintf(dupFile,"\n");
             }
 
+            // (Condition the FT8 block below on terminate == 0 and this line will be unnecessary)
+            //if (terminate) { break; }
+
+            printf("ENTER: pause, X-ENTER: abort beacon, CTRL-C quit,\n  signal 10 complete beacons then quit\n");
+            fprintf(dupFile,"ENTER: pause, X-ENTER: abort beacon, CTRL-C quit,\n  signal 10 complete beacons then quit\n");
+
+            //  Send FT8 messages
+            //
+            if (terminate == 0) {
+                time( &firstTxTime );
+                if ( txFT8( rx0FreqHz, FT8_21MHZ, 15 ) ) {
+                    retval = -1;
+                    break;
+                }; 
+                ft8WasSent = 1;
+            }
+
             //
             //  Send beacons (the beacon block)
             //
-            printf("ENTER: pause, X-ENTER: abort beacon, CTRL-C quit,\n  signal 10 complete beacons then quit\n");
-            fprintf(dupFile,"ENTER: pause, X-ENTER: abort beacon, CTRL-C quit,\n  signal 10 complete beacons then quit\n");
             while (terminate == 0) {
                 //  Quit if done.  All unused beaconData[] entries are zero and are all at end of array so quit on first zero.
                 if (beaconData[ beaconCounter ].txFreqHz == 0) {
                     break;
                 }
-
+                /*      Considered sending FT8 messages here, maybe later.
+                if (beaconCounter == 1) {
+                    if ( txFT8( rx0FreqHz, FT8_24MHZ, 15 ) ) {
+                        retval = -1;
+                        break;
+                    }; 
+                }
+                */
                 //  Send beacon.  Fill in timestamp
                 if (txWspr(rx0FreqHz, &beaconData[beaconCounter])) {
                     retval = -1;
@@ -432,8 +470,14 @@ int main( int argc, char **argv ) {
             //
             // if a beacon was sent then wait two minutes and collect data from WSPRNet.org
             //
+            if ( ft8WasSent ) {
+                if (doCurlFT8( firstTxTime )){                // if I want to see all reports then set firstTxTime to 0.
+                    retval = -1;
+                    break;
+                }
+            }
             if ( beaconWasSent ) {
-                if (waitForTopOfEvenMinute( 0 )) {                                                  // ... wait for two more minutes
+                if (waitForTopOfEvenMinute( 0, 0 )) {                                                  // ... wait for two more minutes
                     retval = -1;
                     break;
                 }
@@ -546,7 +590,7 @@ static int txWspr( int rxFreq, struct BeaconData *beaconData ) { // txFreq, char
     beaconData->temperature = dtemperature;
     strcpy( beaconData->tone, getWavFilename(txFreq) );
 
-    if (waitForTopOfEvenMinute( txFreq )) {
+    if (waitForTopOfEvenMinute( txFreq, 0 )) {
         return 1;
     }
 
@@ -589,6 +633,44 @@ static int txWspr( int rxFreq, struct BeaconData *beaconData ) { // txFreq, char
     }
     return iii;
 }
+
+//  similar to the above but for FT8
+static int txFT8( int rxFreq, int txFreq, int target ) {
+    int iii;
+    char string[16];
+    struct tm *info;
+    time_t rawtime;         // time_t is long integer
+
+    if (waitForTopOfEvenMinute( txFreq, target )) {
+        return 1;
+    }
+
+    //  Put radio in Tx mode and put SDRPlay into Tx mode
+    if (ft847_FETMOXOn()) { return 1; }
+    if (sendUDPMsg( 1 )) { return 1; }
+
+    time( &rawtime );
+    info = gmtime( &rawtime );      // UTC
+    sprintf(string,"%02d:%02d",info->tm_hour, info->tm_min);
+    printf("FT8 freq %d Hz at %s:%02d UTC                            \n", txFreq, string, info->tm_sec);
+    fprintf(dupFile,"FT8 freq %d Hz at %s:%02d UTC                            \n", txFreq, string, info->tm_sec);
+    iii = sendFT8Data( dupFile );
+    if (iii) {
+        printf("Error on sendFT8Data()\n");
+    }
+
+    //  Take radio and SDRPlay out of Tx mode
+    if (sendUDPMsg( 0 )) { return 1; }
+    if (ft847_FETMOXOff()) { return 1; }
+
+    // set radio back to receive frequency
+    usleep(1500000);                        // sleep for 1.5 seconds in case this function is called again.  Need waitForTopOfMinute() to progress past sec == 0
+    if (ft847_writeFreqHz( rxFreq )) {
+        return 1;
+    }
+    return iii;
+}
+
 
 //  This function will add frequency compensation to 6m WSPR and MSK144 frequencies.  If not a 6m frequency then just call ft847_writeFreqHz()
 static int radio_receive_freq( int rxFreq ) {
@@ -669,7 +751,10 @@ static char *getWavFilename( int txFreq ) {
 //      transmit UDP message it resets delayUDPTimer (local variable) to 60.
 //  Later I modified the check for ENTER key to also check for 'X' prior to ENTER.  If so returns non-zero which causes the
 //      beacon block to quit and still do doCurl().
-static int waitForTopOfEvenMinute( int txFreq ) {
+//  Later I added the target parameter, set to 0, 15, 30, or 45.  This was to send out FT8 15 second bursts.  It will exit on 
+//      top of even minute if target == 0 and on odd minutes if target == 15, 30, or 45.  This makes it convenient to do so 
+//      in the interval between WSPR beacons.
+static int waitForTopOfEvenMinute( int txFreq, int target ) {
     /*  struct tm {
             int tm_sec;         // seconds
             int tm_min;         // minutes
@@ -688,10 +773,21 @@ static int waitForTopOfEvenMinute( int txFreq ) {
     int freqChangeDone = 0;     // flag
     int NumBytesIn;
     int delayUDPTimer = 0;
+    int threeSecBeforeTarget;
 
     doBlackout();
 
-    //   loop until top of minute
+    if ( (target != 0) && (target != 15) && (target != 30) && (target != 45) ) {
+        printf("\nTarget not on quarter second intervals (0, 15, 30, or 45 seconds)\n");
+        return 1;
+    }
+    if (target == 0) {
+        threeSecBeforeTarget = 57;
+    } else {
+        threeSecBeforeTarget = target-3;
+    }
+
+   //   loop until top of minute
     printf("\nWaiting for top of even minute: ");  fflush( (FILE *)NULL );
     fprintf(dupFile,"\nWaiting for top of even minute: ");  fflush( (FILE *)dupFile );
     while (1) {
@@ -701,11 +797,12 @@ static int waitForTopOfEvenMinute( int txFreq ) {
         //  This is the usual exit from loop and from function
         if (delayUDPTimer == 0) {                   // if not delayed due to UDP message indicating transmit.  delayUDPTimer will be zero if txFreq == 0.
             if ((freqChangeDone) || (txFreq==0)) {  // ... and already changed frequency at 57 seconds before top of even minute OR if txFreq == 0 meaning no freq change
-                if (info->tm_sec == 0) {            // ... and now top of minute
-                    int isOdd = info->tm_min % 2;   // ... and this is an even minute
-                    if (!isOdd) {                   // ... then break with returnValue == 0 (no error)
+                if (info->tm_sec == target) {       // ... and now top of minute
+                    // no need to check for even minute because it was checked in next if block.
+                    //int isOdd = info->tm_min % 2;   // ... and this is an even minute
+                    //if (!isOdd) {                   // ... then break with returnValue == 0 (no error)
                         break;
-                    }
+                    //}
                 }
             }
         }
@@ -713,7 +810,7 @@ static int waitForTopOfEvenMinute( int txFreq ) {
         //  If three seconds before the top of even second set the radio to txFreq (unless txFreq == 0)
         if ( (!freqChangeDone) && (delayUDPTimer == 0) ) {      // check that it's not already been done and no delay timer running.
             if (txFreq) {                                       // if txFreq != 0
-                if (info->tm_sec == 57) {                       // if 57 second
+                if (info->tm_sec == threeSecBeforeTarget) {     // if 57 second (or 12 or 27 or 42)
                     int isOdd = info->tm_min % 2;               // ... and this is an odd minute
                     if (isOdd) {                                // ... write freq change
                         if (ft847_writeFreqHz( txFreq )) {      // set radio to transmit frequency

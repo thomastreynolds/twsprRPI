@@ -21,10 +21,12 @@
 #include <signal.h>
 #include "twsprRPI.h"
 #include "getTempData.h"
+#include "pulseaudio.h"
 
 int initializePortAudio( void );
 void terminatePortAudio( void );
 int sendWSPRData( char *filename, FILE* dupFile );
+int sendFT8Data( FILE* dupFile );
 pid_t pidof(const char* name);
 
 int initializePortAudio( void ) {
@@ -55,6 +57,7 @@ int sendWSPRData(char *filename, FILE* dupFile )
 
     //  wait 0.5 sec, try getting the pid.  If process not started then wait two seconds and try again.  If that fails then quit.
     usleep(500000);
+    pulseAudioVolume( 0 );
     thepid = pidof("aplay");
     if (thepid == -1) {
         usleep(2000000);
@@ -85,6 +88,67 @@ int sendWSPRData(char *filename, FILE* dupFile )
 
     printf("\rDone sending beacon (%s, %3.3lf F)                      \n",filename,currentTemperature);
     fprintf(dupFile,"\rDone sending beacon (%s, %3.3lf F)                      \n",filename,currentTemperature);
+    return 0;
+}
+
+#define NUM_FT8_AUDIO_FILES  3
+static char ft8AudioFileList[NUM_FT8_AUDIO_FILES][64] = { "TST_NQ6B_DM12_900Hz.wav", "TST_NQ6B_DM12_1400Hz.wav", "TST_NQ6B_DM12_2040Hz.wav" };
+static int ft8AudioFileSelection = 0;
+
+int sendFT8Data( FILE* dupFile ) {
+    struct tm *info;
+    time_t rawtime;         // time_t is long integer
+    int curSec = 0;          // debug for display
+    char command[256];
+    pid_t thepid;
+    double currentTemperature;
+    char ft8AudioFile[256];
+
+    strcpy(ft8AudioFile, ft8AudioFileList[ ft8AudioFileSelection] );
+    ft8AudioFileSelection++;
+    if (ft8AudioFileSelection >= NUM_FT8_AUDIO_FILES ) { ft8AudioFileSelection = 0; }
+
+    //  Invoke aplay with the desired wav file
+    strcpy(command,"aplay --device pulse ");
+    strcat(command,ft8AudioFile);
+    strcat(command," &");
+    system(command);
+
+    //  Get the PID for while() loop below.  This block also verifies that aplay successfully started.
+    //      Wait 0.5 sec, try getting the pid.  If process not started then wait two seconds and try again.  If that fails then quit.
+    usleep(500000);
+    pulseAudioVolume( 1 );
+    thepid = pidof("aplay");
+    if (thepid == -1) {
+        usleep(2000000);
+        thepid = pidof("aplay");
+        if (thepid == -1) {
+            //printf("\n\nFailed to get PID\n\n");
+            return -1;
+        }
+    }
+    //printf("PID is %d\n",thepid);
+
+    //  aplay will quit on its own when 12 second wav file is complete.  This loop waits for it.
+    while (kill(thepid,0) == 0) {           // see if pid is valid.  Invoking kill() with a signal of 0 does not check a signal but verifies the pid.
+        time( &rawtime );                   // rawtime is the number of seconds in the epoch (1/1/1970).  time() also returns the same value.
+        info = localtime( &rawtime );       // info is the structure giving seconds and minutes
+        if (curSec != info->tm_sec) {
+            curSec = info->tm_sec;
+            printf("\rSending FT8 %02d %02d (pid %d, file %s) ",info->tm_min,curSec,thepid,ft8AudioFile);
+            fprintf(dupFile,"\rSending FT8 %02d %02d (pid %d, file %s) ",info->tm_min,curSec,thepid,ft8AudioFile);
+            fflush( (FILE *)NULL );
+        }
+        if (terminate) {
+            break;
+        }
+        usleep(10000);
+    }
+    currentTemperature = getTempData();     
+    //printf("\r");
+
+    printf("\rDone sending FT8 (%s, %3.3lf F)                      \n",ft8AudioFile,currentTemperature);
+    fprintf(dupFile,"\rDone sending FT8 (%s, %3.3lf F)                      \n",ft8AudioFile,currentTemperature);
     return 0;
 }
 
