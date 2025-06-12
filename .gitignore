@@ -5,5 +5,7 @@ offsets.c
 temp.c
 twsprRPI
 x.txt
+y.txt
+z.txt
 log_golden.txt
 duplicate.txt
