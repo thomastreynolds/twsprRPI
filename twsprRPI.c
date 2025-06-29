@@ -25,10 +25,7 @@
        time ago) when switching between MSK144 and FT8.
 
     The FT8 integration is almost complete.  Still to do:
-    - send dupfile over to pskreporter (?)
-    - set FT8 freq to 50 MHz
-    - maybe send FT8 within beacon block, repeating 50 MHz FT8 at 15 seconds past the odd minute.  The last FT8 transmission will be 2:45 before the
-      call to pskreporter.  Can even move pskreporter call to just before call to wsprnet, that way there will be 4:45 between them.
+    - send dupfile over to pskreporter in case I want to write to another terminal (?)
     - modify pskreporter.c to send Email if 6m or 2m heard me
 */
 #include <stdio.h>
@@ -423,22 +420,8 @@ int main( int argc, char **argv ) {
                 fprintf(dupFile,"\n");
             }
 
-            // (Condition the FT8 block below on terminate == 0 and this line will be unnecessary)
-            //if (terminate) { break; }
-
             printf("ENTER: pause, X-ENTER: abort beacon, CTRL-C quit,\n  signal 10 complete beacons then quit\n");
             fprintf(dupFile,"ENTER: pause, X-ENTER: abort beacon, CTRL-C quit,\n  signal 10 complete beacons then quit\n");
-
-            //  Send FT8 messages
-            //
-            if (terminate == 0) {
-                time( &firstTxTime );
-                if ( txFT8( rx0FreqHz, FT8_21MHZ, 15 ) ) {
-                    retval = -1;
-                    break;
-                }; 
-                ft8WasSent = 1;
-            }
 
             //
             //  Send beacons (the beacon block)
@@ -448,14 +431,17 @@ int main( int argc, char **argv ) {
                 if (beaconData[ beaconCounter ].txFreqHz == 0) {
                     break;
                 }
-                /*      Considered sending FT8 messages here, maybe later.
-                if (beaconCounter == 1) {
-                    if ( txFT8( rx0FreqHz, FT8_24MHZ, 15 ) ) {
+
+                // Send FT8 messages
+                if (beaconCounter < 1) {    // only on first 2 minute interval so only one FT8 beacon per beacon block
+                    if (beaconCounter == 0) { time( &firstTxTime ); }
+                    if ( txFT8( rx0FreqHz, FT8_50MHZ, 15 ) ) {
                         retval = -1;
                         break;
                     }; 
-                }
-                */
+                    ft8WasSent = 1;
+               }
+                
                 //  Send beacon.  Fill in timestamp
                 if (txWspr(rx0FreqHz, &beaconData[beaconCounter])) {
                     retval = -1;
@@ -470,6 +456,11 @@ int main( int argc, char **argv ) {
             //
             // if a beacon was sent then wait two minutes and collect data from WSPRNet.org
             //
+            if (waitForTopOfEvenMinute( 0, 0 )) {           // ... wait for two more minutes
+                retval = -1;
+                break;
+            }
+            minWait -= 2;
             if ( ft8WasSent ) {
                 if (doCurlFT8( firstTxTime )){                // if I want to see all reports then set firstTxTime to 0.
                     retval = -1;
@@ -477,15 +468,10 @@ int main( int argc, char **argv ) {
                 }
             }
             if ( beaconWasSent ) {
-                if (waitForTopOfEvenMinute( 0, 0 )) {                                                  // ... wait for two more minutes
-                    retval = -1;
-                    break;
-                }
                 if (doCurl( beaconData, termPTSNum )) {         // ... and get results from wsprnet.org
                     retval = -1;
                     break;
                 }
-                minWait -= 2;
             }
             minCounter = 0;
             printf("\n");
@@ -664,8 +650,8 @@ static int txFT8( int rxFreq, int txFreq, int target ) {
     if (ft847_FETMOXOff()) { return 1; }
 
     // set radio back to receive frequency
-    usleep(1500000);                        // sleep for 1.5 seconds in case this function is called again.  Need waitForTopOfMinute() to progress past sec == 0
-    if (ft847_writeFreqHz( rxFreq )) {
+    usleep(1500000);                        
+    if (radio_receive_freq( rxFreq )) {
         return 1;
     }
     return iii;
@@ -715,6 +701,8 @@ static int radio_receive_freq( int rxFreq ) {
             else { rxFreqUsed = 50260020; }
         }
     }
+
+    //printf("\nRx Freq %d \n",rxFreqUsed);  fprintf(dupFile,"Rx Freq %d \n",rxFreqUsed);
 
     return ft847_writeFreqHz( rxFreqUsed );
 }

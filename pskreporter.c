@@ -17,7 +17,7 @@
 #include <limits.h>
 #include <math.h>
 #include <ctype.h>
-
+#include "twsprRPI.h"
 
 #define START_OF_LINE   "  <receptionReport receiverCallsign="
 #define MAX_ENTRIES     500
@@ -101,9 +101,11 @@ int doCurlFT8( time_t firstTxTime ) {
 
 
 static int processEntries( Entry **entries, int *numEntries, time_t firstTxTime ) {
-    FILE *terminal = stdout;         // either stdout or /dev/pts/?
-    time_t tseconds;        //time_t is long integer
+    FILE *terminal = stdout;        // either stdout or /dev/pts/?
+    time_t tseconds;                //time_t is long integer
     int numRecentEntries = 0;
+    char emailMessage[2048] = "";
+    int needToSendEmail = 0;
 
     if (*numEntries == 0) {
         fprintf(terminal,"\n");
@@ -111,14 +113,20 @@ static int processEntries( Entry **entries, int *numEntries, time_t firstTxTime 
     }
 
     //  Loop through and print things out.
-    fprintf(terminal,"\n");
-    fprintf(terminal,"  Tx Time -  %ld\n",firstTxTime);
+    fprintf(terminal,"\n\n");
+    //fprintf(terminal,"  Tx Time -  %ld\n",firstTxTime);
     for (int iii = 0; iii < *numEntries; iii++) {
         if (entries[iii] != (Entry *)NULL) {
             int tempInt;
+            struct tm *time_info;
+
+            if (strcmp("FT8",entries[iii]->mode)) { continue; }
+
+            //  convert entries[iii]->seconds to long integer tseconds then parse into time structure
+            sscanf( entries[iii]->seconds, "%ld", &tseconds );
+            time_info = localtime(&tseconds);
 
             if (tseconds < firstTxTime) { continue; } 
-            if (strcmp("FT8",entries[iii]->mode)) { continue; }
 
             //  This block of code just determines what color to print the line with.
             sscanf( entries[iii]->distance, "%d", &tempInt );
@@ -131,49 +139,64 @@ static int processEntries( Entry **entries, int *numEntries, time_t firstTxTime 
                 }
             }
 
-            //  convert entries[iii]->seconds to long integer tseconds
-            sscanf( entries[iii]->seconds, "%ld", &tseconds );
-
             //  print the line  call freq  snr  seconds grid distance/azimuth
-            fprintf(terminal,"   %9s %10s  %3s   %10s   %10s %5s mi %3s deg (%s)\n",
+            fprintf(terminal,"%9s %10s  %3s   %02d:%02d:%02d   %10s %5s mi %3s deg (%s)\n",
                    entries[iii]->call, entries[iii]->freq, entries[iii]->snr,
-                   entries[iii]->seconds, entries[iii]->grid, entries[iii]->distance,
+                   time_info->tm_hour, time_info->tm_min, time_info->tm_sec, 
+                   entries[iii]->grid, entries[iii]->distance,
                    entries[iii]->azimuth, entries[iii]->mode );
 
             //  reset the color
             fprintf(terminal,END);
             numRecentEntries++;
+
             //  Potentially send Email if on 6 or 2m
-            /*
             {
                 double dfreq;
+                char fourDigitGrid[64];
+
+                strcpy(fourDigitGrid, entries[iii]->grid);
+                fourDigitGrid[4] = 0;
+                // printf("%s ",string);
 
                 //  Make sure the frequency is 50 MHz or greater.
                 tempInt = sscanf( entries[iii]->freq, "%lf", &dfreq );      // should return 1, one successful conversion
                 if ( (tempInt == 1) && (dfreq >= 50000000) ) {
-                    //  ... and make sure that the grid square is not DM12 or DM13
-                    if (
-                            ( strstr(entries[iii]->grid,"DM12") == (char *)NULL ) &&
-                            ( strstr(entries[iii]->grid,"DM13") == (char *)NULL )
+                    char string[64];
+
+                    strcpy(string, entries[iii]->grid);
+                    string[5] = 0;
+                    //  ... and make sure that the grid square is not socal
+                    if ( 
+                            ( strstr( fourDigitGrid,"DM12") == (char *)NULL ) &&
+                            ( strstr( fourDigitGrid,"DM13") == (char *)NULL ) &&
+                            ( strstr( fourDigitGrid,"DM14") == (char *)NULL ) &&
+                            ( strstr( fourDigitGrid,"DM22") == (char *)NULL ) &&
+                            ( strstr( fourDigitGrid,"DM03") == (char *)NULL ) &&
+                            ( strstr( fourDigitGrid,"DM04") == (char *)NULL ) 
                        ) {
                         char message[1024],string[1024];        // super long strings because I'm too lazy to compute the actual lengths and do a calloc().
 
-                        sprintf(message,"FT8 %s %s\n", entries[iii]->freq, entries[iii]->grid);
-                        sprintf(string,"   %s %10s  %3s  %10s   %6s  %5s mi  %3s deg\n", entries[iii]->timestamp, entries[iii]->freq,
-                                            entries[iii]->snr, entries[iii]->reporter, entries[iii]->grid, entries[iii]->distance, entries[iii]->azimuth);
+                        sprintf(message,"6M FT8\n");
+                        sprintf(string,"%02d:%02d:%02d %10s  %3s  %10s   %6s  %5s mi  %3s deg\n", time_info->tm_hour, time_info->tm_min, time_info->tm_sec, 
+                                                        entries[iii]->freq, entries[iii]->snr, entries[iii]->call, 
+                                                        entries[iii]->grid, entries[iii]->distance, entries[iii]->azimuth);
                         strcat(message,string);
-                        sendUDPEmailMsg( message );
+                        strcat(emailMessage,message);
+                        needToSendEmail = 1;
                         //printf("%s\n",message);
                     }
                 }
             }
-            */
         }
     }
-
     fprintf(terminal,END);
     //fprintf(terminal," ------- \n");
     fprintf(terminal,"Num entries %d\n",numRecentEntries);
+
+    if (needToSendEmail) {
+        sendUDPEmailMsg( emailMessage );
+    }
 
     return 0;
 }
