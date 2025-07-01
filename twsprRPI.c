@@ -123,10 +123,13 @@ static int blackoutUpdateFile( void );
 static int doBlackout( void );
 
 
+//  signal 10 completes beacon block then quits
+//  signal 12 aborts heat wait
+//  signal 3 and signal 2 (CTRL-C) will set terminate variable and program will gracefully terminate.
 static void SignalHandler( int signal ) {
     signalCaptured = signal;
-    if (signalCaptured != SIGUSR1) {        // SIGUSR1 (signal 10) is used to complete the beacon block and then quit.
-        terminate = 1;                      //      All other signals will quit right away.
+    if ((signalCaptured != SIGUSR1) && (signalCaptured != SIGUSR2)) {   // SIGUSR1 (signal 10) is used to complete the beacon block and then quit.
+        terminate = 1;                                                  //      SIGUSR2 (signal 12) will abort heat wait if radio is still on.
     }
 }
 
@@ -329,6 +332,7 @@ int main( int argc, char **argv ) {
             int beaconCounter = 0;
             int heatWaitInLog = 0;
             int heatWaitPowerOff = 0;
+            int heatAbort = 0;
             int ft8WasSent = 0;
             time_t firstTxTime;
 
@@ -339,8 +343,11 @@ int main( int argc, char **argv ) {
                 retval = -1;
                 break;
             }
+
+            //
             //
             //  Read the config file and prepare for the beacons
+            //
             //
             if (readConfigFile( &rx0FreqHz, beaconData )) {
                 retval = -1;    // on error or if rx0FreqHz == 0
@@ -364,11 +371,13 @@ int main( int argc, char **argv ) {
             minWait = MINUTES_TO_WAIT;
 
             //
-            //  Before starting the beacon code block check here if temperature is > 90 deg.  If so wait.
+            //
+            //  Temperature - Before starting the beacon code block check here if temperature is > 90 deg.  If so wait.
+            //
             //
             heatWait = 0;
             printf("\n");  fprintf(dupFile,"\n");
-            while (terminate == 0) {
+            while ( (terminate == 0) && (heatAbort == 0) ) {
                 double currentTemperature = getTempData();
                 if (currentTemperature < TEMPERATURE_BEACON_MAX) { //  This will capture errors also.  getTempData() returns -1.0 on error and +1.0 if process not running.
                     break;
@@ -401,8 +410,8 @@ int main( int argc, char **argv ) {
                         printf("\rTemperature too high: %3.3lf F.  Waiting two minutes (%d min) with power OFF",currentTemperature,heatWait);
                         fprintf(dupFile,"\rTemperature too high: %3.3lf F.  Waiting two minutes (%d min) with power OFF",currentTemperature,heatWait);
                     } else {
-                        printf("\rTemperature too high: %3.3lf F.  Waiting two minutes (%d min)               ",currentTemperature,heatWait);
-                        fprintf(dupFile,"\rTemperature too high: %3.3lf F.  Waiting two minutes (%d min)               ",currentTemperature,heatWait);
+                        printf("\rTemperature too high: %3.3lf F.  Waiting two minutes (%d min) Sig 12 abort  ",currentTemperature,heatWait);
+                        fprintf(dupFile,"\rTemperature too high: %3.3lf F.  Waiting two minutes (%d min) Sig 12 abort  ",currentTemperature,heatWait);
                     }
                     fflush(stdout);   fflush(dupFile);
                     // wait two minutes.
@@ -410,6 +419,12 @@ int main( int argc, char **argv ) {
                         sleep(1);
                         if (terminate) {
                             break;
+                        }
+                        if (!heatWaitPowerOff) {                    // if radio still on and signal 12 then abort heat block.
+                            if (signalCaptured == SIGUSR2) {        
+                                heatAbort = 1;
+                                break;
+                            }
                         }
                     }
                     heatWait += 2;
@@ -424,7 +439,9 @@ int main( int argc, char **argv ) {
             fprintf(dupFile,"ENTER: pause, X-ENTER: abort beacon, CTRL-C quit,\n  signal 10 complete beacons then quit\n");
 
             //
+            //
             //  Send beacons (the beacon block)
+            //
             //
             while (terminate == 0) {
                 //  Quit if done.  All unused beaconData[] entries are zero and are all at end of array so quit on first zero.
@@ -1188,6 +1205,10 @@ static int installSignalHandlers( int useMyHandlers ) {
       return 1;
     }
     if ( sigaction( SIGINT, &psa, NULL ) == -1 )  {    //  CTRL-C, signal 2
+      printf("\nError installing signal handler.\n");
+      return 1;
+    }
+    if ( sigaction( SIGUSR2, &psa, NULL ) == -1 )  {    //  signal 12
       printf("\nError installing signal handler.\n");
       return 1;
     }
