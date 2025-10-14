@@ -275,11 +275,11 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
                 //  Make sure the frequency is 50 MHz or greater.
                 tempInt = sscanf( entries[iii]->freq, "%lf", &dfreq );      // should return 1, one successful conversion
                 if ( (tempInt == 1) && (dfreq >= 50.0) ) {
-                    //  ... and make sure that the grid square is not DM12 or DM13
-                    if (
+                    //  ... and make sure that the grid square is not DM12, DM13, or DM14
+                    if ( 1 /*
                             ( strstr(entries[iii]->reporterLocation,"DM12") == (char *)NULL ) &&
                             ( strstr(entries[iii]->reporterLocation,"DM13") == (char *)NULL ) &&
-                            ( strstr(entries[iii]->reporterLocation,"DM14") == (char *)NULL )
+                            ( strstr(entries[iii]->reporterLocation,"DM14") == (char *)NULL ) */
                        ) {
                         char message[1024],string[1024];        // super long strings because I'm too lazy to compute the actual lengths and do a calloc().
 
