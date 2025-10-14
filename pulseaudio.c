@@ -19,7 +19,7 @@
 #include <ctype.h>
 #include <malloc.h>
 
-#define VOLUME_LOW  24600       // scale is from 0 to 65535, 0% to 100%
+#define VOLUME_LOW  26269 //24600 - 38%, 26269 - 41%       // scale is from 0 to 65535, 0% to 100%
 #define VOLUME_HIGH 44500 //49000  //41350 was volume setting for 100% when using WSPR beacon wav files
 
 int pulseAudioVolume( int setVolumeHigh );
