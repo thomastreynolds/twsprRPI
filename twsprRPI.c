@@ -93,6 +93,7 @@ static struct sockaddr_in adr_inet3;    // for UDP message to send Email
 int SockAddrStructureSize3;             // for UDP message to send Email
 static struct sockaddr_in adr_clnt4;    // for receiving data, used in recvfrom() in two locations
 static int sockRx;                      // socket for receiving data from UDPRepeater4.py
+static int doFT8;                       // switch for sending out FT8 beacon
 
 static char lineToRemove[256] = "";     // for blackoutCheck() and blackoutUpdateFile()
 static FILE *dupFile;                   // for DUP_FILENAME, see comment above
@@ -145,6 +146,8 @@ int main( int argc, char **argv ) {
     int resetSelectWait = 1;
 
     int rx0FreqHz = WSPR_DEFAULT_10M;
+
+    doFT8 = 1;
 
     if (argc > 1) {
         for (int i = 1; i < argc; i++) {
@@ -420,8 +423,9 @@ int main( int argc, char **argv ) {
                         if (terminate) {
                             break;
                         }
-                        if (!heatWaitPowerOff) {                    // if radio still on and signal 12 then abort heat block.
-                            if (signalCaptured == SIGUSR2) {        
+                        if (signalCaptured == SIGUSR2) {
+                            signalCaptured = 0;                 // if this is not cleared then it will continue to ignore heat wait.
+                            if (!heatWaitPowerOff) {            // if radio still on and signal 12 then abort heat block.
                                 heatAbort = 1;
                                 break;
                             }
@@ -450,15 +454,17 @@ int main( int argc, char **argv ) {
                 }
 
                 // Send FT8 messages
-                if (beaconCounter < 1) {    // only on first 2 minute interval so only one FT8 beacon per beacon block
-                    if (beaconCounter == 0) { time( &firstTxTime ); }
-                    if ( txFT8( rx0FreqHz, FT8_50MHZ, 15 ) ) {
-                        retval = -1;
-                        break;
-                    }; 
-                    ft8WasSent = 1;
-               }
-                
+                if (doFT8) {
+                    if (beaconCounter < 1) {    // only on first 2 minute interval so only one FT8 beacon per beacon block
+                        if (beaconCounter == 0) { time( &firstTxTime ); }
+                        if ( txFT8( rx0FreqHz, FT8_50MHZ, 15 ) ) {
+                            retval = -1;
+                            break;
+                        }
+                        ft8WasSent = 1;
+                    }
+                }
+
                 //  Send beacon.  Fill in timestamp
                 if (txWspr(rx0FreqHz, &beaconData[beaconCounter])) {
                     retval = -1;
@@ -667,7 +673,7 @@ static int txFT8( int rxFreq, int txFreq, int target ) {
     if (ft847_FETMOXOff()) { return 1; }
 
     // set radio back to receive frequency
-    usleep(1500000);                        
+    usleep(1500000);
     if (radio_receive_freq( rxFreq )) {
         return 1;
     }
@@ -756,8 +762,8 @@ static char *getWavFilename( int txFreq ) {
 //      transmit UDP message it resets delayUDPTimer (local variable) to 60.
 //  Later I modified the check for ENTER key to also check for 'X' prior to ENTER.  If so returns non-zero which causes the
 //      beacon block to quit and still do doCurl().
-//  Later I added the target parameter, set to 0, 15, 30, or 45.  This was to send out FT8 15 second bursts.  It will exit on 
-//      top of even minute if target == 0 and on odd minutes if target == 15, 30, or 45.  This makes it convenient to do so 
+//  Later I added the target parameter, set to 0, 15, 30, or 45.  This was to send out FT8 15 second bursts.  It will exit on
+//      top of even minute if target == 0 and on odd minutes if target == 15, 30, or 45.  This makes it convenient to do so
 //      in the interval between WSPR beacons.
 static int waitForTopOfEvenMinute( int txFreq, int target ) {
     /*  struct tm {
@@ -803,11 +809,12 @@ static int waitForTopOfEvenMinute( int txFreq, int target ) {
         if (delayUDPTimer == 0) {                   // if not delayed due to UDP message indicating transmit.  delayUDPTimer will be zero if txFreq == 0.
             if ((freqChangeDone) || (txFreq==0)) {  // ... and already changed frequency at 57 seconds before top of even minute OR if txFreq == 0 meaning no freq change
                 if (info->tm_sec == target) {       // ... and now top of minute
-                    // no need to check for even minute because it was checked in next if block.
-                    //int isOdd = info->tm_min % 2;   // ... and this is an even minute
-                    //if (!isOdd) {                   // ... then break with returnValue == 0 (no error)
+                    // Check for even minute was checked in next if block but only if txFreq != 0 so it needs to be done again here.  If txFreq == 0
+                    //     then without this redundant check it will exit on odd minute
+                    int isOdd = info->tm_min % 2;   // ... and this is an even minute
+                    if (!isOdd) {                   // ... then break with returnValue == 0 (no error)
                         break;
-                    //}
+                    }
                 }
             }
         }
@@ -969,6 +976,10 @@ static int readConfigFile( int *rxFreqHz, struct BeaconData *beaconData ) {
     //      The tokens (rxFreqHz or txFreqHz) must start on the first character of the line.
     //      The frequency must be in Hz and can be be as short as 7 digits (<10 MHz) or as long as 10 digits (144 or 432 MHz)
     //      Lines without this format can be present but will be ignored.
+    //
+    //      An additional token exists for turning on and off the FT8 beacon 
+    //          noFT8
+    //      It must be the first five characters on the line.
 
     fptr = fopen(CONFIG_FILENAME,"rt");
     if (fptr == (FILE *)NULL) {
@@ -993,7 +1004,14 @@ static int readConfigFile( int *rxFreqHz, struct BeaconData *beaconData ) {
         if (cc == (char *)NULL) {
             break;
         }
-        if (strlen(string) < 16) {      // token (rx/tx1/tx2/tx3/tx4FreqHz) always 8 characters + at least one space + at least 7 characters for the freq.
+
+        doFT8 = 1;      // global variable
+        if (!strncmp(string,"noFT8",5)) {
+            doFT8 = 0;
+            continue;
+        }
+
+        if (strlen(string) < 16) {      // token (rxFreqHz/txFreqHz) always 8 characters + at least one space + at least 7 characters for the freq.
             continue;
         }
         string[8] = 0;    // null terminate right after the token
@@ -1018,8 +1036,13 @@ static int readConfigFile( int *rxFreqHz, struct BeaconData *beaconData ) {
 
     clearerr(fptr);
     fclose(fptr);
-    printf("\n\nNumber of beacons %d\n",numBeacons);
-    fprintf(dupFile,"\n\nNumber of beacons %d\n",numBeacons);
+    printf("\n\nNumber of beacons %d",numBeacons);
+    fprintf(dupFile,"\n\nNumber of beacons %d",numBeacons);
+    if (doFT8){
+        printf(" plus FT8");
+        fprintf(dupFile," plus FT8");
+    }
+    printf("\n");  fprintf(dupFile,"\n");
     if (*rxFreqHz == 0) {
         return -1;
     } else if (convResult < 0) {
