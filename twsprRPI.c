@@ -27,6 +27,14 @@
     The FT8 integration is almost complete.  Still to do:
     - send dupfile over to pskreporter in case I want to write to another terminal (?)
     - modify pskreporter.c to send Email if 6m or 2m heard me
+
+    ---
+
+    I sometimes get "Error on sendWSPRData()".  After that nothing works.  If I happen to stop it during beacon then aplay will remain open and bind will fail
+    when I try to restart it.  "netstat -lntup" will show aplay.  Kill aplay and all is well.  Might be best to quit the program on this error, since it never
+    recovers (did this - waiting to test).  Perhaps also set the radio back to the receive frequency and kill aplay.
+
+    Line 628~, after call to sendWSPRData() I write to log file but no entry for anything below 15m.
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -468,6 +476,7 @@ int main( int argc, char **argv ) {
                 //  Send beacon.  Fill in timestamp
                 if (txWspr(rx0FreqHz, &beaconData[beaconCounter])) {
                     retval = -1;
+                    terminate = 1;      // quit program
                     break;
                 }
 
