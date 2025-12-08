@@ -55,7 +55,7 @@ int sendWSPRData(char *filename, FILE* dupFile )
     strcat(command," &");
     system(command);
 
-    //  wait 0.5 sec, try getting the pid.  If process not started then wait two seconds and try again.  If that fails then quit.
+    //  wait 0.5 sec, try getting the pid.  If process not started then wait two seconds and try again.  If that fails try as second time and then quit.
     usleep(500000);
     pulseAudioVolume( 0 );
     thepid = pidof("aplay");
@@ -63,7 +63,12 @@ int sendWSPRData(char *filename, FILE* dupFile )
         usleep(2000000);
         thepid = pidof("aplay");
         if (thepid == -1) {
-            return -1;
+            usleep(2000000);
+            thepid = pidof("aplay");
+            if (thepid == -1) {
+                printf("Failed to get PID\n");
+                return -1;
+            }
         }
     }
     //printf("PID is %d\n",thepid);
@@ -163,7 +168,7 @@ pid_t pidof(const char* name)
     char buf[512];
 
     if (!(dir = opendir("/proc"))) {        // opendir opens a stream into the directory
-        perror("can't open /proc");
+        printf("can't open /proc\n");
         return -1;
     }
 
