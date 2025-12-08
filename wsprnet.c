@@ -3,8 +3,9 @@
         - uncomment MAIN_HERE directive at the bottom of file.
             gcc -g -Wall wsprnet.c azdist.c geodist.c grid2deg.c -lm
         - I usually want to remove the curl command below and just read the latest x.txt file, created from twsprRPI.
-        - I'll have to change the three parameters in call to doCurl() at the bottom of the file, date1/2/3 to whatever times are in the x.txt file.
+        - I'll have to change the parameters in call to doCurl() at the bottom of the file to whatever times are in the x.txt file.
         - The call to sendUDPEmailMsg() must be commented out.  There is a commented out print statement below it that can be restored to print its message.
+        - in ProcessEntries() remove the block of code that calls readConfigFileWSPRFreq(), approximately line 210.  That function is in twsprRPI.c
 */
 #include <stdio.h>
 #include <time.h>
@@ -111,13 +112,10 @@ int doCurl( struct BeaconData *beaconData, char* termPTSNum ) {
         if (cc == (char *)NULL) {
             break;
         }
-        //if ((strncmp( string, START_OF_LINE1, strlen(START_OF_LINE1) ) == 0) || (strncmp( string, START_OF_LINE2, strlen(START_OF_LINE2) ) == 0))  {
         if (strstr( string, START_OF_LINE1) || strstr( string, START_OF_LINE2) )  {
-            //printf("%s",string);
-            if (parseHTMLLine( string, beaconData, numBeacons, entries, &numEntries, thedate, &numberOfDuplicates ) ) {
-                //returnValue = -1;
-                break;
-            }
+            // parseHTMLLine() - Returns -1 when the timestamp from this HTML line does not match any of the beacon timestamps.  I used to abort the loop at this point.
+            //    The reason I changed this is explained in parseHTMLLine() just above the return -1 statement.
+            parseHTMLLine( string, beaconData, numBeacons, entries, &numEntries, thedate, &numberOfDuplicates );
         }
     }
 
@@ -276,7 +274,8 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
                 tempInt = sscanf( entries[iii]->freq, "%lf", &dfreq );      // should return 1, one successful conversion
                 if ( (tempInt == 1) && (dfreq >= 50.0) ) {
                     //  ... and make sure that the grid square is not DM12, DM13, or DM14
-                    if ( 1 /*
+                    if ( strcmp( entries[iii]->reporter, "W1EUJ" )   //  strcmp() returns zero on match, so any non-zero I want sent out.
+                            /*
                             ( strstr(entries[iii]->reporterLocation,"DM12") == (char *)NULL ) &&
                             ( strstr(entries[iii]->reporterLocation,"DM13") == (char *)NULL ) &&
                             ( strstr(entries[iii]->reporterLocation,"DM14") == (char *)NULL ) */
@@ -374,6 +373,11 @@ static int parseHTMLLine( char *string, struct BeaconData *beaconData, int numBe
     *cc1 = 0;   strcpy(thedate, field);     // retrieve date for below.
 
     //  Since they are in chronological order the first line that doesn't match any of the timestamps is the last one needed.
+    //    Later I found a station whose clock was off, reporting a valid report with a timestamp not on an even minute.  This function then returned -1 and the calling
+    //    routine aborted processing the rest of the lines.  I could have solved this by converting timestamp and beaconData[jjj].timestamp into integers and just checking
+    //    if the time was after the first beacon time.  That meant dealing with the ':' part of the timestamp and doing it on every line downloaded from wsprnet.org.  Instead
+    //    I had the calling routine ignore the return value.  As a result it will process all 600 lines downloaded from wsprnet.org, another waste.  But since this
+    //    check occurs early on in the function it's not too bad.
     done = 1;
     for (int jjj = 0; jjj < numBeacons; jjj++) {
         if (strcmp(timestamp,beaconData[jjj].timestamp) == 0) {
@@ -384,9 +388,6 @@ static int parseHTMLLine( char *string, struct BeaconData *beaconData, int numBe
     if (done) {
         return -1;
     }
-    //if (strcmp(timestamp,date1) && strcmp(timestamp,date2) && strcmp(timestamp,date3) && strcmp(timestamp,date4)) {
-    //    return -1;
-    //}
 
     //  Next field is my call, ignore it.
     cc = parseHTMLTag( cc, field );    if (cc == (char *)-1) { return -1; }
@@ -715,7 +716,7 @@ static void processGoldenList( int txFreqHz, char* tone, int txFreqHzActual, dou
 
 
 
-// uncomment curl() call and, if using a different curl results, change fopen (two lines below curl) back to x.txt
+// see comments at the top of this file in order to run stand alone.
 //#define MAIN_HERE 1
 #ifdef MAIN_HERE
 
@@ -726,14 +727,16 @@ int main() {
         beaconData[iii].timestamp[0] = 0;
         beaconData[iii].txFreqHz = 0;
     }
-    strcpy(beaconData[0].timestamp,"19:10:00");
-    beaconData[0].txFreqHz = 24924650;
-    strcpy(beaconData[1].timestamp,"19:14:00");
-    beaconData[1].txFreqHz = 28124640;
-    strcpy(beaconData[2].timestamp,"19:18:00");
-    beaconData[2].txFreqHz = 50293160;
+    strcpy(beaconData[0].timestamp,"17:22:00");
+    beaconData[0].txFreqHz = 21094600;
+    strcpy(beaconData[1].timestamp,"17:26:00");
+    beaconData[1].txFreqHz = 24924630;
+    strcpy(beaconData[2].timestamp,"17:30:00");
+    beaconData[2].txFreqHz = 28124640;
+    strcpy(beaconData[3].timestamp,"17:34:00");
+    beaconData[3].txFreqHz = 50293060;
 
-    return doCurl( beaconData, "3" );
+    return doCurl( beaconData, "7" );   // second parameter is the terminal number (terminalPTSNumber) to write the data to.
 }
 
 
