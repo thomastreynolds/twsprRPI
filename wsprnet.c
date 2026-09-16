@@ -6,6 +6,10 @@
         - I'll have to change the parameters in call to doCurl() at the bottom of the file to whatever times are in the x.txt file.
         - The call to sendUDPEmailMsg() must be commented out.  There is a commented out print statement below it that can be restored to print its message.
         - in ProcessEntries() remove the block of code that calls readConfigFileWSPRFreq(), approximately line 210.  That function is in twsprRPI.c
+
+    CONSIDER changing the printout.  I now use three terminals.  Print the results as one big list, starting from the lowest frequency.  Put a break between
+    each band.  I need to know how many lines are on a terminal.  Simply fill one terminal and then move on to the next.  If the results are longer than all three
+    terminals then dump the overflow on the last terminal.  Coding for this is at about line 225.
 */
 #include <stdio.h>
 #include <time.h>
@@ -54,15 +58,15 @@ struct Entry {
 };
 typedef struct Entry Entry;
 
-char *goldenCalls[] = { "KK6PR",     "KP4MD",  "W7PAU",  "KA7OEI-1", "AC0G",
-                        "KPH",       "KV0S",   "WA2TP",  "W2ACR",    "KA7OEI/Q",
-                        "AI6VN/KH6", "K6RFT",  "KV4TT",  "W3ENR",    "K1RA-PI",
-                        "W7WKR-K2",  "KV6X",   "N3IZN/SDR", "AA6RF" };
+char *goldenCalls[] = { "K6VZK", "KP4MD",  "KPH",  "KA7OEI-1", "AD8Y",
+                        "N5TNL", "KV0S",   "WA2TP",  "W2ACR",  "KA7OEI/Q",
+                        "AI6VN/KH6", "K6RFT", "KV4TT", "W1CK", "VE6FT",
+                        "W7WKR-K2", "N9AWU", "W3PM", "N8GA" };
 #define NUM_OF_GOLDEN_CALLS 19   // do this because "size_t n = sizeof(a) / sizeof(int);" won't work since each element is a different size.
 
-int doCurl( struct BeaconData *beaconData, char* termPTSNum );
+int doCurl( struct BeaconData *beaconData, char* termPTSNum, char* termPTSNum2 );
 
-static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, char *thedate, int minBeacon );
+static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, char* termPTSNum2, char *thedate, int minBeacon, int minBeacon2 );
 static int parseHTMLLine( char *string, struct BeaconData *beaconData, int numBeacons, Entry **entry, int *numEntries, char *thedate, int *numberOfDuplicates );
 static char* parseHTMLTag( char *string, char *field );
 static void doOneGrid( char *his, int *nAz, int *nDmiles );
@@ -72,7 +76,7 @@ static int goldenListNotEmpty( void );
 static void insertInGoldenList( char *freq );
 static void processGoldenList( int txFreqHz, char* tone, int txFreqHzActual, double temperature, FILE *fptr, char* thedate, int *headerNotPrinted  );
 
-int doCurl( struct BeaconData *beaconData, char* termPTSNum ) {
+int doCurl( struct BeaconData *beaconData, char* termPTSNum, char* termPTSNum2 ) {
     FILE *fptr;
     char *cc, string[4096];
     int returnValue = 0;
@@ -82,10 +86,10 @@ int doCurl( struct BeaconData *beaconData, char* termPTSNum ) {
     int numBeacons;
     int numberOfDuplicates;
     int iii;
-    int minBeacon;      // the lowest beacon frequency
+    int minBeacon,minBeacon2;      // the lowest beacon frequency and the second lowest
 
-    //  Remove the seconds from the timestamp string.  It should already be removed, just in case.
-    minBeacon = INT_MAX;
+    //  Remove the seconds from the timestamp string.  It should already be removed, just in case.  Also get the minumum beacon frequency.
+    minBeacon = minBeacon2 = INT_MAX;
     for (iii = 0; iii < MAX_NUMBER_OF_BEACONS; iii++) {
         if (beaconData[iii].txFreqHz == 0) {
             break;
@@ -95,6 +99,18 @@ int doCurl( struct BeaconData *beaconData, char* termPTSNum ) {
         }
         if (beaconData[iii].txFreqHz < minBeacon) {         // get lowest beacon frequency in Hz and place it in minBeacon
             minBeacon = beaconData[iii].txFreqHz;
+        }
+    }
+    //  Go through the beacon list again to get the second lowest beacon frequency by ignoring the minBeacon frequency found above.
+    for (iii = 0; iii < MAX_NUMBER_OF_BEACONS; iii++) {
+        if (beaconData[iii].txFreqHz == 0) {
+            break;
+        }
+        if (beaconData[iii].txFreqHz == minBeacon) {         // bypass the minimum beacon frequency
+            continue;
+        }
+        if (beaconData[iii].txFreqHz < minBeacon2) {         // get second lowest beacon frequency in Hz and place it in minBeacon2
+            minBeacon2 = beaconData[iii].txFreqHz;
         }
     }
     numBeacons = iii;
@@ -113,15 +129,15 @@ int doCurl( struct BeaconData *beaconData, char* termPTSNum ) {
             break;
         }
         if (strstr( string, START_OF_LINE1) || strstr( string, START_OF_LINE2) )  {
-            // parseHTMLLine() - Returns -1 when the timestamp from this HTML line does not match any of the beacon timestamps.  I used to abort the loop at this point.
-            //    The reason I changed this is explained in parseHTMLLine() just above the return -1 statement.
-            parseHTMLLine( string, beaconData, numBeacons, entries, &numEntries, thedate, &numberOfDuplicates );
+            // parseHTMLLine() - Returns -1 when the timestamp from this HTML line does not match any of the beacon timestamps.  At one time I was ignoring it.
+            //    The reason I changed and then changed it back is explained in parseHTMLLine() just above the return -1 statement.
+            if (-1 == parseHTMLLine( string, beaconData, numBeacons, entries, &numEntries, thedate, &numberOfDuplicates )) { break; }
         }
     }
 
     //  The output of the above curl statement and file read is entries[], a list of all the station that heard this beacon, with duplicates removed.
     //      Now display them.
-    processEntries( entries, &numEntries, termPTSNum, thedate, minBeacon );
+    processEntries( entries, &numEntries, termPTSNum, termPTSNum2, thedate, minBeacon, minBeacon2 );
 
     for (iii = 0; iii < numEntries; iii++) {
         if (entries[iii] != (Entry *)NULL) {
@@ -149,11 +165,13 @@ int doCurl( struct BeaconData *beaconData, char* termPTSNum ) {
 }
 
 
-static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, char *thedate, int minBeacon ) {
+#define NUM_LINES_IN_TERMINAL 62
+
+static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, char* termPTSNum2, char *thedate, int minBeacon, int minBeacon2 ) {  // minBeacon & minBeacon2 not used in this version
     int num28MHz = 0;
-    FILE *fptr, *remoteTerminal;
+    FILE *fptr, *remoteTerminal, *remoteTerminal2;
     int firstGolden = 0;
-    double remoteTerminalFreq;
+    int entriesPrinted = 0;
 
     resetGoldenList();              // clear out golden list here, before checking if entries are blank (wsprnet.org is down).  Otherwise golden list from previous burst will be repeated
     if (*numEntries == 0) {
@@ -161,18 +179,19 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
         return 0;
     }
 
-    remoteTerminal = (FILE *)NULL;
-    remoteTerminalFreq = 0.0;
+    // Set up remote terminal output if command line parameters were passed.
+    remoteTerminal = remoteTerminal2 = stdout; //(FILE *)NULL;
     if (termPTSNum[0] != 0) {
         char filename[64];
 
-        sprintf(filename,"/dev/pts/%s",termPTSNum);
-        remoteTerminal = fopen(filename,"at");      //  Error is ok because remoteTerminal will be checked against NULL
+        sprintf(filename,"/dev/pts/%s",termPTSNum);     // construct the /dev/pts/XX filename representing the terminal for the lowest WSPR freq
+        remoteTerminal = fopen(filename,"at");          // Error is ok because remoteTerminal will be checked against NULL
+    }
+    if (termPTSNum2[0] != 0) {
+        char filename[64];
 
-        remoteTerminalFreq = (double)minBeacon;         // convert minBeacon to double because it is compared against a double (24924000 becomes 24924000.0)
-        remoteTerminalFreq /= 1000000;                  // convert from kHz to mHz (24924000.0 becomes 24.924000)
-        remoteTerminalFreq = floor(remoteTerminalFreq); // remove everything after decimal (24.924000 becomes 24.000000)
-        remoteTerminalFreq += 1.0;                      // add one because the comparison below is for all freqs below this value (24.000000 becomes 25.000000)
+        sprintf(filename,"/dev/pts/%s",termPTSNum2);        
+        remoteTerminal2 = fopen(filename,"at");             
     }
 
     fptr = fopen(RAW_LOG_NAME,"at");
@@ -198,7 +217,7 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
     }
 
     //  Loop through and print things out.
-    for (int iii = 0; iii < *numEntries; iii++) {
+    for (int iii = (*numEntries)-1; iii >=0; iii--) {   // print them in reverse order, start with the lowest frequency and work up
         if (entries[iii] != (Entry *)NULL) {
             int tempInt;
             double entryFreq;
@@ -216,16 +235,17 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
                 if (readConfigFileWSPRFreq(tempInt-1500)) { continue; }    // readConfigFileWSPRFreq() returns -1 if not a supported WSPR freq.  Have to add 1500 Hz for tone offset.
             }
 
-            //  Get the frequency as a double for use below, checking for 21 MHz and 28 MHz.
+            //  Get the frequency as a double for use below.
             sscanf(  entries[iii]->freq, "%lf", &entryFreq );
 
-            //  Set terminal to stdout unless ( 21 MHz AND a /dev/pts/XX number was input on the command line )
-            terminal = stdout;
-            if (entryFreq < remoteTerminalFreq) {   //  if entry is on the lowest beacon frequency band ...
-                if (remoteTerminal) {               //  ... and if user imput a PTS number on the command line
-                    terminal = remoteTerminal;      //  ... then write to that terminal.
-                }
+            if (entriesPrinted < NUM_LINES_IN_TERMINAL) {
+                terminal = remoteTerminal;
+            } else if (entriesPrinted < (NUM_LINES_IN_TERMINAL*2)) { 
+                terminal = remoteTerminal2;
+            } else {
+                terminal = stdout;
             }
+            entriesPrinted++;       // move this if entriesPrinted is used somewhere below.  Right now, this if/elseif/else statement is the only place than uses it.
 
             //  This block of code just determines what color to print the line with.
             sscanf( entries[iii]->distance, "%d", &tempInt );
@@ -252,11 +272,17 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
             }
 
             //  print the line
-            fprintf(terminal,"   %s %10s  %3s %2s  %10s   %6s  %5s mi  %3s deg\n",
-                   entries[iii]->timestamp, entries[iii]->freq, entries[iii]->snr, entries[iii]->drift,
-                   entries[iii]->reporter, entries[iii]->reporterLocation, entries[iii]->distance,
-                   entries[iii]->azimuth); //, entries[iii]->distance2);
-
+            if (remoteTerminal && remoteTerminal2) {
+                // If using three terminals it gets crowded on display.  Omit the azimuth column to make it fit better.
+                fprintf(terminal,"   %s %10s  %3s %2s  %10s   %6s  %5s mi\n",
+                    entries[iii]->timestamp, entries[iii]->freq, entries[iii]->snr, entries[iii]->drift,
+                    entries[iii]->reporter, entries[iii]->reporterLocation, entries[iii]->distance );
+            } else {
+                fprintf(terminal,"   %s %10s  %3s %2s  %10s   %6s  %5s mi  %3s deg\n",
+                    entries[iii]->timestamp, entries[iii]->freq, entries[iii]->snr, entries[iii]->drift,
+                    entries[iii]->reporter, entries[iii]->reporterLocation, entries[iii]->distance,
+                    entries[iii]->azimuth); //, entries[iii]->distance2);
+            }
             //  reset the color
             fprintf(terminal,END);
 
@@ -274,7 +300,9 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
                 tempInt = sscanf( entries[iii]->freq, "%lf", &dfreq );      // should return 1, one successful conversion
                 if ( (tempInt == 1) && (dfreq >= 50.0) ) {
                     //  ... and make sure that the grid square is not DM12, DM13, or DM14
-                    if ( strcmp( entries[iii]->reporter, "W1EUJ" )   //  strcmp() returns zero on match, so any non-zero I want sent out.
+                    if ( strcmp( entries[iii]->reporter, "W1EUJ" ) &&  //  strcmp() returns zero on match, so any non-zero I want sent out.
+                            strcmp( entries[iii]->reporter, "N6KK" ) &&
+                                strcmp( entries[iii]->reporter, "NJ6N" )
                             /*
                             ( strstr(entries[iii]->reporterLocation,"DM12") == (char *)NULL ) &&
                             ( strstr(entries[iii]->reporterLocation,"DM13") == (char *)NULL ) &&
@@ -286,7 +314,7 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
                         sprintf(string,"   %s %10s  %3s  %10s   %6s  %5s mi  %3s deg\n", entries[iii]->timestamp, entries[iii]->freq,
                                             entries[iii]->snr, entries[iii]->reporter, entries[iii]->reporterLocation, entries[iii]->distance, entries[iii]->azimuth);
                         strcat(message,string);
-                        sendUDPEmailMsg( message );
+                        sendUDPEmailMsg( message );  
                         //printf("%s\n",message);
                     }
                 }
@@ -297,6 +325,10 @@ static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, c
     if (remoteTerminal) {
         fprintf(remoteTerminal," ------- \n");
         fclose(remoteTerminal);
+    }
+    if (remoteTerminal2) {
+        fprintf(remoteTerminal2," ------- \n");
+        fclose(remoteTerminal2);
     }
 
     //  Print out the "golden callsigns".  The ones that, from observation, seem to be GPS controlled because they are almost always reporting the same frequency.
@@ -361,6 +393,7 @@ static int parseHTMLLine( char *string, struct BeaconData *beaconData, int numBe
     char field[128];
     char timestamp[64],freq[64],snr[64],drift[64], reporter[64], reporterLocation[64], distance[64],azimuth[64],distance2[64];
     int done;
+    static int numInvalidTimestamps = 0;
 
     //  Find beginning of first <td> tag
     cc = strstr(string,"<td align=");
@@ -378,6 +411,8 @@ static int parseHTMLLine( char *string, struct BeaconData *beaconData, int numBe
     //    if the time was after the first beacon time.  That meant dealing with the ':' part of the timestamp and doing it on every line downloaded from wsprnet.org.  Instead
     //    I had the calling routine ignore the return value.  As a result it will process all 600 lines downloaded from wsprnet.org, another waste.  But since this
     //    check occurs early on in the function it's not too bad.
+    //  This solution turned out to be insufficient.  I had some x.txt files which had correct timestamps from the previous day and this function was adding it to 
+    //    entries[].  So I need the calling routine to again abort on -1.  I'll return that after three (?) invalid timestamps, a patch which should solve both problems.
     done = 1;
     for (int jjj = 0; jjj < numBeacons; jjj++) {
         if (strcmp(timestamp,beaconData[jjj].timestamp) == 0) {
@@ -386,7 +421,13 @@ static int parseHTMLLine( char *string, struct BeaconData *beaconData, int numBe
         }
     }
     if (done) {
-        return -1;
+        numInvalidTimestamps++;
+        if (numInvalidTimestamps > 3) {
+            numInvalidTimestamps = 0;
+            return -1;
+        } else {
+            return 0;
+        }
     }
 
     //  Next field is my call, ignore it.
@@ -722,22 +763,264 @@ static void processGoldenList( int txFreqHz, char* tone, int txFreqHzActual, dou
 
 int main() {
     struct BeaconData beaconData[ MAX_NUMBER_OF_BEACONS ];
+    char termPTSNum[3] = { 0 };        // the tty number, setting to zero will print on stdout
+    char termPTSNum2[3] = { 0 }; 
+    //char termPTSNum[3] = { "5" };      
+    //char termPTSNum2[3] = { "6" };
 
     for (int iii = 0; iii < MAX_NUMBER_OF_BEACONS; iii++) {
         beaconData[iii].timestamp[0] = 0;
         beaconData[iii].txFreqHz = 0;
     }
-    strcpy(beaconData[0].timestamp,"17:22:00");
-    beaconData[0].txFreqHz = 21094600;
-    strcpy(beaconData[1].timestamp,"17:26:00");
-    beaconData[1].txFreqHz = 24924630;
-    strcpy(beaconData[2].timestamp,"17:30:00");
-    beaconData[2].txFreqHz = 28124640;
-    strcpy(beaconData[3].timestamp,"17:34:00");
-    beaconData[3].txFreqHz = 50293060;
+    strcpy(beaconData[0].timestamp,"03:38:00");
+    beaconData[0].txFreqHz = 1836600;
+    strcpy(beaconData[1].timestamp,"03:42:00");
+    beaconData[1].txFreqHz = 21094600;
+    strcpy(beaconData[2].timestamp,"03:48:00");
+    beaconData[2].txFreqHz = 24924630;
+    strcpy(beaconData[3].timestamp,"03:52:00");
+    beaconData[3].txFreqHz = 28124640;
+    strcpy(beaconData[4].timestamp,"03:56:00");
+    beaconData[4].txFreqHz = 50293050;
 
-    return doCurl( beaconData, "7" );   // second parameter is the terminal number (terminalPTSNumber) to write the data to.
+    return doCurl( beaconData, termPTSNum, termPTSNum2); 
 }
+
+
+#endif
+
+
+#ifdef COLD_STORAGE
+
+/*
+
+
+
+    This is the processEntries function that I used previously.  It will place the results for the minimum beacon in one terminal, second lowest beacon
+    in a second terminal, and the rest in stdout.  The one above simply prints across all three terminals.
+
+
+
+*/
+
+static int processEntries( Entry **entries, int *numEntries, char* termPTSNum, char* termPTSNum2, char *thedate, int minBeacon, int minBeacon2 ) {
+    int num28MHz = 0;
+    FILE *fptr, *remoteTerminal, *remoteTerminal2;
+    int firstGolden = 0;
+    double remoteTerminalFreq,remoteTerminalFreq2;
+
+    resetGoldenList();              // clear out golden list here, before checking if entries are blank (wsprnet.org is down).  Otherwise golden list from previous burst will be repeated
+    if (*numEntries == 0) {
+        printf("\n");
+        return 0;
+    }
+
+    // Set up remote terminal output if command line parameters were passed.
+    remoteTerminal = (FILE *)NULL;
+    remoteTerminalFreq = remoteTerminalFreq2 = 0.0;
+    if (termPTSNum[0] != 0) {
+        char filename[64];
+
+        sprintf(filename,"/dev/pts/%s",termPTSNum);     // construct the /dev/pts/XX filename representing the terminal for the lowest WSPR freq
+        remoteTerminal = fopen(filename,"at");          // Error is ok because remoteTerminal will be checked against NULL
+
+        remoteTerminalFreq = (double)minBeacon;         // convert minBeacon to double because it is compared against a double (24924000 becomes 24924000.0)
+        remoteTerminalFreq /= 1000000;                  // convert from kHz to mHz (24924000.0 becomes 24.924000)
+        remoteTerminalFreq = floor(remoteTerminalFreq); // remove everything after decimal (24.924000 becomes 24.000000)
+        remoteTerminalFreq += 1.0;                      // add one because the comparison below is for all freqs below this value (24.000000 becomes 25.000000)
+    }
+    if (termPTSNum2[0] != 0) {
+        char filename[64];
+
+        sprintf(filename,"/dev/pts/%s",termPTSNum2);        
+        remoteTerminal2 = fopen(filename,"at");             
+
+        remoteTerminalFreq2 = (double)minBeacon2;           
+        remoteTerminalFreq2 /= 1000000;                  
+        remoteTerminalFreq2 = floor(remoteTerminalFreq2); 
+        remoteTerminalFreq2 += 1.0;                      
+    }
+
+    fptr = fopen(RAW_LOG_NAME,"at");
+    if (fptr == (FILE *)NULL) {
+        printf("\n");
+        return 0;
+    }
+
+    //  Run through the list once and count how many 28 MHz stations are there.  I need to know this in advance for use in the second loop below.
+    //      so that I can know to print in red when less than 10 entries.
+    for (int iii = 0; iii < *numEntries; iii++) {
+        if (entries[iii] != (Entry *)NULL) {
+            double entryFreq;
+            sscanf(  entries[iii]->freq, "%lf", &entryFreq );
+
+            // I want to collect all the 28 MHz reports and average the frequency value.  I also need the number of 28 MHz stations for use within the loop.
+            if (entryFreq > 28.0) {
+                if (entryFreq < 29.0) {     // if 10m entry
+                    num28MHz++;
+                }
+            }
+        }
+    }
+
+    //  Loop through and print things out.
+    for (int iii = 0; iii < *numEntries; iii++) {
+        if (entries[iii] != (Entry *)NULL) {
+            int tempInt;
+            double entryFreq;
+            FILE *terminal;         // either stdout or /dev/pts/?
+
+            {
+                char *ccc;              // I started getting bizzare frequencies from WSPRNet.org.  Find these and eliminate them.
+                char string[64];
+
+                strcpy(string, entries[iii]->freq);
+                ccc = strchr(string,'.');                   // search for decimal point in string and remove it
+                if (ccc == (char *)NULL) { continue; }
+                strcpy( ccc, &ccc[1] );
+                sscanf(string,"%d",&tempInt);               // convert string to int, representing frequency in Hz
+                if (readConfigFileWSPRFreq(tempInt-1500)) { continue; }    // readConfigFileWSPRFreq() returns -1 if not a supported WSPR freq.  Have to add 1500 Hz for tone offset.
+            }
+
+            //  Get the frequency as a double for use below, checking for 21 MHz and 28 MHz.
+            sscanf(  entries[iii]->freq, "%lf", &entryFreq );
+
+            //  Set terminal to stdout unless 1) if freq less than the lowest beacon freq (remoteTerminalFreq) or 2) freq less than the second lowest (remoteTerminalFreq2)
+            terminal = stdout;
+            if (entryFreq < remoteTerminalFreq) {   //  if entry is on the lowest beacon frequency band ...
+                if (remoteTerminal) {               //  ... and if user imput a PTS number on the command line
+                    terminal = remoteTerminal;      //  ... then write to that terminal.
+                }
+            } else if (entryFreq < remoteTerminalFreq2) {   //  if entry is on the second lowest beacon frequency band ...
+                if (remoteTerminal2) {              //  ... and if user imput a PTS number on the command line
+                    terminal = remoteTerminal2;     //  ... then write to that terminal.
+                }
+            }
+
+            //  This block of code just determines what color to print the line with.
+            sscanf( entries[iii]->distance, "%d", &tempInt );
+            if (tempInt > 3000) {                                   // if distance > 3000 then print green
+                fprintf(terminal,GREEN);
+            } else {
+                sscanf( entries[iii]->snr, "%d", &tempInt );
+                if (tempInt >= 0) {                                 // if snr >= 0 then print blue
+                    fprintf(terminal,BLUE);
+                } else {
+                    if (num28MHz < 10) {                // 28 MHz - highlight in red things that are not LOS but don't bother until the band begins to shut down.
+                        if (entryFreq > 28.0) {
+                            if (entryFreq < 29.0) {     // if 10m entry
+                                char grid[64];
+                                strcpy( grid, entries[iii]->reporterLocation );     // if 4-digit grid square not DM12, DM13, or DM14 then print red
+                                grid[4] = 0;        // 4 digit grid square
+                                if ( (strcmp(grid,"DM12")) && (strcmp(grid,"DM13")) && (strcmp(grid,"DM14")) && (strcmp(grid,"DM13")) ) {
+                                    fprintf(terminal,RED);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            //  print the line
+            if (remoteTerminal && remoteTerminal2) {
+                // If using three terminals it gets crowded on display.  Omit the azimuth column to make it fit better.
+                fprintf(terminal,"   %s %10s  %3s %2s  %10s   %6s  %5s mi\n",
+                    entries[iii]->timestamp, entries[iii]->freq, entries[iii]->snr, entries[iii]->drift,
+                    entries[iii]->reporter, entries[iii]->reporterLocation, entries[iii]->distance );
+            } else {
+                fprintf(terminal,"   %s %10s  %3s %2s  %10s   %6s  %5s mi  %3s deg\n",
+                    entries[iii]->timestamp, entries[iii]->freq, entries[iii]->snr, entries[iii]->drift,
+                    entries[iii]->reporter, entries[iii]->reporterLocation, entries[iii]->distance,
+                    entries[iii]->azimuth); //, entries[iii]->distance2);
+            }
+            //  reset the color
+            fprintf(terminal,END);
+
+            //  print the line to a file
+            fprintf(fptr,"   %s %10s  %3s %2s  %10s   %6s  %5s mi  %3s deg  (%s mi)\n",
+                   entries[iii]->timestamp, entries[iii]->freq, entries[iii]->snr, entries[iii]->drift,
+                   entries[iii]->reporter, entries[iii]->reporterLocation, entries[iii]->distance,
+                   entries[iii]->azimuth, entries[iii]->distance2);
+
+            //  Potentially send Email if on 6 or 2m
+            {
+                double dfreq;
+
+                //  Make sure the frequency is 50 MHz or greater.
+                tempInt = sscanf( entries[iii]->freq, "%lf", &dfreq );      // should return 1, one successful conversion
+                if ( (tempInt == 1) && (dfreq >= 50.0) ) {
+                    //  ... and make sure that the grid square is not DM12, DM13, or DM14
+                    if ( strcmp( entries[iii]->reporter, "W1EUJ" ) &&  //  strcmp() returns zero on match, so any non-zero I want sent out.
+                            strcmp( entries[iii]->reporter, "N6KK" )
+                            /*
+                            ( strstr(entries[iii]->reporterLocation,"DM12") == (char *)NULL ) &&
+                            ( strstr(entries[iii]->reporterLocation,"DM13") == (char *)NULL ) &&
+                            ( strstr(entries[iii]->reporterLocation,"DM14") == (char *)NULL ) */
+                       ) {
+                        char message[1024],string[1024];        // super long strings because I'm too lazy to compute the actual lengths and do a calloc().
+
+                        sprintf(message,"WSPR %s %s\n", entries[iii]->freq, entries[iii]->reporterLocation);
+                        sprintf(string,"   %s %10s  %3s  %10s   %6s  %5s mi  %3s deg\n", entries[iii]->timestamp, entries[iii]->freq,
+                                            entries[iii]->snr, entries[iii]->reporter, entries[iii]->reporterLocation, entries[iii]->distance, entries[iii]->azimuth);
+                        strcat(message,string);
+                        sendUDPEmailMsg( message );  
+                        //printf("%s\n",message);
+                    }
+                }
+            }
+        }
+    }
+
+    if (remoteTerminal) {
+        fprintf(remoteTerminal," ------- \n");
+        fclose(remoteTerminal);
+    }
+    if (remoteTerminal2) {
+        fprintf(remoteTerminal2," ------- \n");
+        fclose(remoteTerminal2);
+    }
+
+    //  Print out the "golden callsigns".  The ones that, from observation, seem to be GPS controlled because they are almost always reporting the same frequency.
+    for (int iii = 0; iii < *numEntries; iii++) {
+        if (entries[iii] != (Entry *)NULL) {
+            double entryFreq;
+            sscanf(  entries[iii]->freq, "%lf", &entryFreq );
+            if (entryFreq > 24.0) {        // only print out golden freqs on 12m and above
+                int thisIsGoldenCall = 0;
+
+                for (int jjj = 0; jjj < NUM_OF_GOLDEN_CALLS; jjj++) {
+                    int sss = strcmp(entries[iii]->reporter, goldenCalls[jjj]);
+                    if (sss == 0) {
+                        thisIsGoldenCall = 1;
+                        break;
+                    }
+                }
+
+                if (thisIsGoldenCall) {
+                    insertInGoldenList( entries[iii]->freq );
+
+                    if (firstGolden == 0) {         // print separator line if this is the first.
+                        firstGolden = 1;
+                        fprintf(fptr,"\n");
+                    }
+
+                    //  print the golden call line to log file
+                    fprintf(fptr,"  g %s %10s  %3s %2s  %10s   %6s  %5s mi  %3s deg (%s mi)\n",
+                           entries[iii]->timestamp, entries[iii]->freq, entries[iii]->snr, entries[iii]->drift,
+                           entries[iii]->reporter, entries[iii]->reporterLocation, entries[iii]->distance,
+                           entries[iii]->azimuth, entries[iii]->distance2);
+
+                }
+            }
+        }
+    }
+
+    fprintf(fptr," ------- %s above \n",thedate);
+    fclose(fptr);
+
+    return 0;
+}
+
 
 
 #endif

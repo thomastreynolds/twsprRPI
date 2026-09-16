@@ -87,7 +87,7 @@
 #define UDP_TX_MESSAGE          "txMode;"
 #define DEFAULT_MY_IP           "192.168.1.105"
 
-extern int doCurl( struct BeaconData *beaconData, char* termPTSNum );
+extern int doCurl( struct BeaconData *beaconData, char* termPTSNum, char* termPTSNum2 );
 
 int terminate = 0;
 
@@ -150,6 +150,7 @@ int main( int argc, char **argv ) {
     int NumBytesIn;
     struct BeaconData beaconData[ MAX_NUMBER_OF_BEACONS ];
     char termPTSNum[4] = "";
+    char termPTSNum2[4] = "";
     int heatWait = 0;
     int resetSelectWait = 1;
 
@@ -160,19 +161,26 @@ int main( int argc, char **argv ) {
     if (argc > 1) {
         for (int i = 1; i < argc; i++) {
             if (!strcmp(argv[i],"?"))  {
-                printf("\n\nUsage \"./twsprRPI <PTS> 2>/dev/null\"");
+                printf("\n\nUsage \"./twsprRPI <PTS> <PTS2> 2>/dev/null\"");
                 printf("\n     - <PTS> terminal number used to output 15m results.  Appended to /dev/pts/.");
+                printf("\n     - <PTS2> terminal number used to output 12m results.  Appended to /dev/pts/.");
                 printf("\n       Use \"tty\" command to determine this terminal's number.");
                 printf("\n       Do NOT use leading zeros.");
-                printf("\n       If parameter is not a number then 15m output will go the this terminal.");
+                printf("\n       If parameter is not a number then it will be ignored and 15m output will go the this terminal.");
                 printf("\n\n");
                 return 1;
             }
 
-            //  Anything else then check to see if all numbers
+            //  Anything else then check to see if all numbers.  The first number is termPTSNum, the second (if any) is termPTSNum2.
+            //      termPTSNum is the terminal for the lowest frequency beacon (usually 15m) and termPTSNum2 is for the second lowest (usually 12m).
             if ( strspn(argv[i], "0123456789") == strlen(argv[i]) ) {
-                strcpy(termPTSNum,argv[i]);
-                printf("\nUsing /dev/pts/%s for lowest freq output\n\n",termPTSNum);
+                if (termPTSNum[0] == 0) {
+                    strcpy(termPTSNum,argv[i]);
+                    printf("\nUsing /dev/pts/%s for lowest freq output\n\n",termPTSNum);
+                } else if (termPTSNum2[0] == 0) {
+                    strcpy(termPTSNum2,argv[i]);
+                    printf("\nUsing /dev/pts/%s for second lowest freq output\n\n",termPTSNum2);
+                }
             }
         }
     }
@@ -418,11 +426,11 @@ int main( int argc, char **argv ) {
                     }
                     // print message on the screen
                     if (heatWaitPowerOff) {
-                        printf("\rTemperature too high: %3.3lf F.  Waiting two minutes (%d min) with power OFF",currentTemperature,heatWait);
-                        fprintf(dupFile,"\rTemperature too high: %3.3lf F.  Waiting two minutes (%d min) with power OFF",currentTemperature,heatWait);
+                        printf("\rTemperature: %3.3lf F.  Wait two min (%d min) with power OFF",currentTemperature,heatWait);
+                        fprintf(dupFile,"\rTemperature: %3.3lf F.  Wait two min (%d min) with power OFF",currentTemperature,heatWait);
                     } else {
-                        printf("\rTemperature too high: %3.3lf F.  Waiting two minutes (%d min) Sig 12 abort  ",currentTemperature,heatWait);
-                        fprintf(dupFile,"\rTemperature too high: %3.3lf F.  Waiting two minutes (%d min) Sig 12 abort  ",currentTemperature,heatWait);
+                        printf("\rTemperature: %3.3lf F.  Wait two min (%d min) Sig 12 abort  ",currentTemperature,heatWait);
+                        fprintf(dupFile,"\rTemperature: %3.3lf F.  Wait two min (%d min) Sig 12 abort  ",currentTemperature,heatWait);
                     }
                     fflush(stdout);   fflush(dupFile);
                     // wait two minutes.
@@ -500,7 +508,7 @@ int main( int argc, char **argv ) {
                 }
             }
             if ( beaconWasSent ) {
-                if (doCurl( beaconData, termPTSNum )) {         // ... and get results from wsprnet.org
+                if (doCurl( beaconData, termPTSNum, termPTSNum2 )) {         // ... and get results from wsprnet.org
                     retval = -1;
                     break;
                 }
@@ -609,6 +617,7 @@ static int txWspr( int rxFreq, struct BeaconData *beaconData ) { // txFreq, char
     strcpy( beaconData->tone, getWavFilename(txFreq) );
 
     if (waitForTopOfEvenMinute( txFreq, 0 )) {
+        printf("Error on waitForTopOfEvenMinute() within txWspr()\n");
         return 1;
     }
 
@@ -845,6 +854,8 @@ static int waitForTopOfEvenMinute( int txFreq, int target ) {
         }
 
         if (terminate) {                    // if signal caught.
+            printf("Terminating wait for top of even minute, terminate flag set.\n");
+            fprintf(dupFile,"Terminating wait for top of even minute, terminate flag set.\n");
             returnValue = 1;
             break;
         }
@@ -870,7 +881,7 @@ static int waitForTopOfEvenMinute( int txFreq, int target ) {
             if (NumBytesIn > 0) {
                 int terminateButDoCurl = 0;
                 while ( NumBytesIn > 0 ) {  //  Swallow ENTER and everything before it.
-                    if ((unsigned char)toupper(getchar()) == 'X') {
+                    if (((unsigned char)toupper(getchar()) == 'X') || ((unsigned char)toupper(getchar()) == 'x')) {
                         terminateButDoCurl = 1;
                     }
                     NumBytesIn--;
@@ -1065,6 +1076,7 @@ static int readConfigFile( int *rxFreqHz, struct BeaconData *beaconData ) {
 //  Verify that the frequency is a WSPR frequency.  Returns 0 if so and -1 if not.  Note that I'm not checking for one freq on each band.  So
 //      there is noting to stop me from sending a WSPR message on the same frequency several times in a row.
 int readConfigFileWSPRFreq( int convResult ) {
+    if ( readConfigFileWSPRFreqHelp( convResult, WSPR_160M ) == 0 ) { return 0; }
     if ( readConfigFileWSPRFreqHelp( convResult, WSPR_30M ) == 0 ) { return 0; }
     if ( readConfigFileWSPRFreqHelp( convResult, WSPR_17M ) == 0 ) { return 0; }
     if ( readConfigFileWSPRFreqHelp( convResult, WSPR_15M ) == 0 ) { return 0; }
